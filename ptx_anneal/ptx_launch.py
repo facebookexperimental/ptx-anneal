@@ -385,8 +385,17 @@ class LoadedKernel:
         p = prepared
         _chk(
             _drv.cuLaunchKernel(
-                self.func, p.gx, p.gy, p.gz, p.bx, p.by, p.bz, self.shared, stream,
-                int(ctypes.addressof(p.arr)), 0,
+                self.func,
+                p.gx,
+                p.gy,
+                p.gz,
+                p.bx,
+                p.by,
+                p.bz,
+                self.shared,
+                stream,
+                int(ctypes.addressof(p.arr)),
+                0,
             )
         )
 

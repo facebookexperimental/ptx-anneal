@@ -50,9 +50,7 @@ def main() -> None:
     ref = spec.ref_fn(*inputs)
     rel = _rel_err(out, ref)
     if rel > spec.rtol:
-        raise SystemExit(
-            f"[smoke] FAIL kernel={args.kernel} rel_err={rel:.3e} > rtol={spec.rtol:.3e}"
-        )
+        raise SystemExit(f"[smoke] FAIL kernel={args.kernel} rel_err={rel:.3e} > rtol={spec.rtol:.3e}")
 
     # A few extra launches so the compiled+consumed kernel is actually exercised.
     for _ in range(args.iters):

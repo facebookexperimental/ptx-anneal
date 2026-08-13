@@ -88,9 +88,7 @@ def find_ptxas() -> str | None:
 
 def ptxas_version(path: str) -> str | None:
     try:
-        out = subprocess.run(
-            [path, "--version"], capture_output=True, text=True, timeout=20, check=False
-        ).stdout
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20, check=False).stdout
     except (OSError, subprocess.SubprocessError):
         # Not executable, wrong arch, hung past the timeout: "unknown version", not a crash. The
         # caller decides (an unparseable version simply fails the floor check).

@@ -124,8 +124,7 @@ def main() -> int:
     src = ss_meta.get("source", "?")
     tag = ss_meta.get("resolved_tag")
     print(
-        f"search space: {ss_meta.get('filename') or ss_meta.get('path')} "
-        f"[{src}{f' {tag}' if tag else ''}]",
+        f"search space: {ss_meta.get('filename') or ss_meta.get('path')} [{src}{f' {tag}' if tag else ''}]",
         file=sys.stderr,
         flush=True,
     )
@@ -138,8 +137,19 @@ def main() -> int:
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(bytes.fromhex(acf_hex))
-            cmd = [*score_cmd, "--task", task, "--acf", path,
-                   "--ptxas", ptxas, "--warmup", str(warmup), "--rep", str(rep)]
+            cmd = [
+                *score_cmd,
+                "--task",
+                task,
+                "--acf",
+                path,
+                "--ptxas",
+                ptxas,
+                "--warmup",
+                str(warmup),
+                "--rep",
+                str(rep),
+            ]
             out = subprocess.run(cmd, capture_output=True, text=True, check=False)
         finally:
             os.unlink(path)

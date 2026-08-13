@@ -26,8 +26,11 @@ from ptx_anneal import task as task_mod
 from ptx_anneal.validate import load_validator
 
 _NP = {
-    "float32": np.float32, "float16": np.float16, "int32": np.int32,
-    "int64": np.int64, "int8": np.int8,
+    "float32": np.float32,
+    "float16": np.float16,
+    "int32": np.int32,
+    "int64": np.int64,
+    "int8": np.int8,
 }
 
 
@@ -41,6 +44,7 @@ def _resolve_ptxas(spec):
     p = spec.get("ptxas") or os.environ.get("TRITON_PTXAS_BLACKWELL_PATH") or os.environ.get("TRITON_PTXAS_PATH")
     if not p:
         from shutil import which
+
         p = which("ptxas")
     if not p:
         raise RuntimeError("no ptxas (set spec['ptxas'] / TRITON_PTXAS_BLACKWELL_PATH)")

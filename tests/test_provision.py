@@ -74,9 +74,7 @@ def test_wheel_probe_finds_nvidia_cuda_nvcc_layout(tmp_path, monkeypatch):
     wheel.mkdir(parents=True)
     (wheel / "ptxas").write_text("")
     monkeypatch.setattr(provision, "_wheel_ptxas", provision._wheel_ptxas)  # ensure real impl
-    monkeypatch.setattr(
-        "sysconfig.get_paths", lambda: {"purelib": str(site), "platlib": str(site)}
-    )
+    monkeypatch.setattr("sysconfig.get_paths", lambda: {"purelib": str(site), "platlib": str(site)})
     found = provision._wheel_ptxas()
     assert found == [str(wheel / "ptxas")]  # de-duplicated across purelib/platlib
 

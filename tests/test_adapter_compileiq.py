@@ -45,9 +45,14 @@ def fake_compileiq(monkeypatch):
             calls["retrieved"] = True
             self.resolution_metadata = types.SimpleNamespace(
                 as_dict=lambda: {
-                    "compiler": "ptxas", "compiler_version": "13.3", "variant": "default",
-                    "requested_tag": "latest", "resolved_tag": "search-spaces-2026.05.22",
-                    "sha256": "deadbeef", "size_bytes": 13632, "source": "github_release",
+                    "compiler": "ptxas",
+                    "compiler_version": "13.3",
+                    "variant": "default",
+                    "requested_tag": "latest",
+                    "resolved_tag": "search-spaces-2026.05.22",
+                    "sha256": "deadbeef",
+                    "size_bytes": 13632,
+                    "source": "github_release",
                 }
             )
             return "/cache/ptxas13.3_search_space.bin"

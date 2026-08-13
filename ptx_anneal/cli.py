@@ -168,9 +168,18 @@ def _cmd_tune(args) -> int:
     if best_finite and baseline_ok and (is_win or force_admit):
         win = (baseline_ms - best_ms) / baseline_ms
         meta = {
-            "target": target.name, "arch": arch, "ir_hash": ir_hash, "entry": t.spec.get("entry"),
-            "baseline_ms": baseline_ms, "best_ms": best_ms, "search_win": win, "forced": not is_win,
-            "evaluated": evaluated, "engine": engine_name, "valid": valid, "ptxas_version": ver,
+            "target": target.name,
+            "arch": arch,
+            "ir_hash": ir_hash,
+            "entry": t.spec.get("entry"),
+            "baseline_ms": baseline_ms,
+            "best_ms": best_ms,
+            "search_win": win,
+            "forced": not is_win,
+            "evaluated": evaluated,
+            "engine": engine_name,
+            "valid": valid,
+            "ptxas_version": ver,
             # Which search space produced this ACF. The search space is a tuning *input*, and the
             # engine resolves it to "latest" by default, so recording it is what keeps an admitted
             # ACF explainable (and a pinned CIQ_SS_TAG meaningful) after the catalog moves on.
@@ -185,7 +194,12 @@ def _cmd_tune(args) -> int:
         # of overwriting each other. The triton-core consumer (magnon.store.acf_path) reads the same
         # version-tagged path using ITS ptxas version; the kernel identity (ir_hash) stays version-free.
         store_path = LocalStore(args.output or default_store_root()).write(
-            target.name, arch, ir_hash, bytes.fromhex(acf_hex), meta, toolchain_version=ver or "",
+            target.name,
+            arch,
+            ir_hash,
+            bytes.fromhex(acf_hex),
+            meta,
+            toolchain_version=ver or "",
         )
         forced_tag = "" if is_win else " [FORCE_ADMIT: no genuine win; admitted to exercise consume]"
         print(
@@ -196,8 +210,10 @@ def _cmd_tune(args) -> int:
         print("note: the search-time win is noisy; the trustworthy decision is the consumer's A/B vs baseline.")
     else:
         reason = (
-            "no baseline" if not baseline_ok
-            else "no valid candidate" if not best_finite
+            "no baseline"
+            if not baseline_ok
+            else "no valid candidate"
+            if not best_finite
             else "no candidate beat the baseline (set PTX_ANNEAL_FORCE_ADMIT=1 to admit best anyway)"
         )
         print(f"no candidate admitted ({reason}); engine={engine_name} evaluated={evaluated} valid={valid}")
@@ -251,7 +267,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("scoring")
     g.add_argument(
-        "--bench", choices=["cudagraph", "do_bench"], default="cudagraph",
+        "--bench",
+        choices=["cudagraph", "do_bench"],
+        default="cudagraph",
         help="scoring metric: cudagraph (fast/deterministic, default) or do_bench (L2-flush median, "
         "faithful to the consumer's A/B)",
     )
@@ -260,15 +278,19 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--target", default="ptx", help="target (default: %(default)s)")
 
     g = p.add_argument_group("provisioning pins", "all optional -- each of these self-provisions")
-    g.add_argument("--ptxas", help="ptxas to use (else $PTXAS / $TRITON_PTXAS_BLACKWELL_PATH / PATH / "
-                                   "an installed nvidia-cuda-nvcc wheel)")
+    g.add_argument(
+        "--ptxas",
+        help="ptxas to use (else $PTXAS / $TRITON_PTXAS_BLACKWELL_PATH / PATH / an installed nvidia-cuda-nvcc wheel)",
+    )
     g.add_argument("--ss", help="engine search-space path (else the engine fetches its published catalog)")
     g.add_argument(
-        "--engine-python", dest="engine_python",
+        "--engine-python",
+        dest="engine_python",
         help="interpreter that has the engine (default: this interpreter / $PTX_ANNEAL_ENGINE_PYTHON)",
     )
     g.add_argument(
-        "--engine-adapter", dest="engine_adapter",
+        "--engine-adapter",
+        dest="engine_adapter",
         help="bring-your-own engine adapter script (default: bundled CompileIQ / $PTX_ANNEAL_ENGINE_ADAPTER)",
     )
     return p
