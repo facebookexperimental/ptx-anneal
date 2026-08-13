@@ -63,10 +63,10 @@ _ARGS = [("tensor", {"id": 0, "shape": [16], "dtype": "float32", "strides": [1]}
 
 
 def _md(**over):
-    base = dict(
-        global_scratch_size=0, profile_scratch_size=0, num_ctas=1,
-        ctas_per_cga=None, tensordesc_meta=[], num_warps=4, shared=0,
-    )
+    base = {
+        "global_scratch_size": 0, "profile_scratch_size": 0, "num_ctas": 1,
+        "ctas_per_cga": None, "tensordesc_meta": [], "num_warps": 4, "shared": 0,
+    }
     base.update(over)
     return SimpleNamespace(**base)
 

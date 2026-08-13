@@ -140,7 +140,7 @@ def main() -> int:
                 f.write(bytes.fromhex(acf_hex))
             cmd = [*score_cmd, "--task", task, "--acf", path,
                    "--ptxas", ptxas, "--warmup", str(warmup), "--rep", str(rep)]
-            out = subprocess.run(cmd, capture_output=True, text=True)
+            out = subprocess.run(cmd, capture_output=True, text=True, check=False)
         finally:
             os.unlink(path)
         seen["n"] += 1

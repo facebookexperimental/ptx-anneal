@@ -114,6 +114,24 @@ store/ABC/`doctor` layer only — pure Python, no GPU, no engine.
 > a different store key, and a guaranteed MISS at consume — which fails open to the untuned kernel, so
 > it looks healthy while delivering nothing.
 
+## Development
+
+```bash
+pip3 install -e ".[dev]"
+pytest -q                 # CPU-only: no GPU, torch, triton or cuda-python needed
+ruff check .              # lint  — CI gates on this
+ruff format --check .     # format — CI gates on this
+ruff check --fix . && ruff format .   # apply both
+```
+
+Lint and format config live in `[tool.ruff]` / `[tool.ruff.lint]` in `pyproject.toml` (line length
+120), so an editor, CI and the internal linter all read the same rules. `ruff` is pinned in the
+`dev` extra: it is a CI gate, and an unpinned release can turn the build red with no code change.
+
+CI runs three jobs — `test` (Python 3.10–3.13), `lint`, and `bare-install`, which installs with **no
+extras** and runs `ptx-anneal doctor` to prove the pure-Python core still works without a GPU or an
+engine.
+
 ## Contributing
 
 See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out, and our

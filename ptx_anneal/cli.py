@@ -143,7 +143,7 @@ def _cmd_tune(args) -> int:
     if args.ss:
         env["PTX_ANNEAL_SS"] = os.path.abspath(args.ss)
     try:
-        proc = subprocess.run([engine_python, adapter], env=env)
+        proc = subprocess.run([engine_python, adapter], env=env, check=False)
         if proc.returncode != 0:
             raise SystemExit(f"ptx_anneal: engine adapter exited {proc.returncode}")
         with open(result_path) as f:

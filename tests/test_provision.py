@@ -54,7 +54,7 @@ def test_falls_back_to_first_candidate_when_none_meet_the_floor(tmp_path, monkey
         monkeypatch.delenv(var, raising=False)
     old = _fake_ptxas(tmp_path, "ptxas_path", "12.9")
     monkeypatch.setattr(provision.shutil, "which", lambda _: old)
-    monkeypatch.setattr(provision, "_wheel_ptxas", lambda: [])
+    monkeypatch.setattr(provision, "_wheel_ptxas", list)
     assert provision.find_ptxas() == old
 
 
@@ -62,7 +62,7 @@ def test_no_ptxas_anywhere_is_none(monkeypatch):
     for var in ("TRITON_PTXAS_BLACKWELL_PATH", "TRITON_PTXAS_PATH"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(provision.shutil, "which", lambda _: None)
-    monkeypatch.setattr(provision, "_wheel_ptxas", lambda: [])
+    monkeypatch.setattr(provision, "_wheel_ptxas", list)
     assert provision.find_ptxas() is None
 
 

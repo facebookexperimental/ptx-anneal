@@ -17,5 +17,7 @@ from . import ws_gemm  # noqa: F401
 # kernel never blocks the ws_gemm smoke path.
 try:
     from . import synth_acf  # noqa: F401
-except Exception as e:  # pragma: no cover
+except Exception as e:  # noqa: BLE001 - pragma: no cover; a registered kernel may fail to import
+    # for any reason (missing torch/triton, a bad @triton.jit body, an unsupported arch). Reporting
+    # and continuing is the point: one broken kernel must not take out the whole registry.
     print(f"[e2e] synth_acf kernel unavailable: {e}", file=sys.stderr)

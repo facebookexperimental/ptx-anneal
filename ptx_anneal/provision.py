@@ -88,8 +88,12 @@ def find_ptxas() -> str | None:
 
 def ptxas_version(path: str) -> str | None:
     try:
-        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20).stdout
-    except Exception:
+        out = subprocess.run(
+            [path, "--version"], capture_output=True, text=True, timeout=20, check=False
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        # Not executable, wrong arch, hung past the timeout: "unknown version", not a crash. The
+        # caller decides (an unparseable version simply fails the floor check).
         return None
     m = re.search(r"release\s+([0-9]+\.[0-9]+)", out)
     if m:
@@ -109,13 +113,19 @@ def min_ptxas() -> str:
 
 
 def gpu_status() -> dict:
-    """Whether the launch stack (cuda-python + torch + a visible GPU) is available."""
+    """Whether the launch stack (cuda-python + torch + a visible GPU) is available.
+
+    Every probe here is best-effort by design: this backs ``doctor``, whose entire job is to report
+    what is missing. An absent or broken optional dependency is the answer, not an error -- so the
+    blind excepts below are deliberate, and must stay blind: a half-installed torch can raise almost
+    anything on import, and `doctor` failing is strictly worse than `doctor` saying "no GPU".
+    """
     status = {"cuda_python": False, "torch": False, "gpu": False, "detail": ""}
     try:
         import cuda.bindings.driver  # noqa: F401
 
         status["cuda_python"] = True
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - absent/broken cuda-python is a reportable state
         pass
     try:
         import torch
@@ -124,7 +134,7 @@ def gpu_status() -> dict:
         status["gpu"] = bool(torch.cuda.is_available())
         if status["gpu"]:
             status["detail"] = torch.cuda.get_device_name(0)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - ditto for torch / a driver that fails to initialise
         pass
     return status
 

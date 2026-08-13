@@ -12,4 +12,4 @@ entry-point group; they are never vendored here.
 
 from .base import SearchBackend, SearchResult, available_backends, load_backend
 
-__all__ = ["SearchBackend", "SearchResult", "load_backend", "available_backends"]
+__all__ = ["SearchBackend", "SearchResult", "available_backends", "load_backend"]

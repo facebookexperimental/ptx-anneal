@@ -51,8 +51,8 @@ def available_backends() -> list[str]:
     try:
         for ep in metadata.entry_points(group=ENTRY_POINT_GROUP):
             names.add(ep.name)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001, S110 - a third-party plugin with broken metadata must not
+        pass          # take out discovery; the built-ins below are still returned.
     return sorted(names)
 
 

@@ -30,7 +30,11 @@ import tempfile
 # (e.g. a frontend's collection path) without requiring cuda-python.
 try:
     from cuda.bindings import driver as _drv
-except Exception:  # pragma: no cover - only the launch path needs it
+except Exception:  # noqa: BLE001 - pragma: no cover; optional dep, only the launch path needs it.
+    # Deliberately blind: cuda-python can fail on import for reasons beyond ImportError (a driver
+    # mismatch, a partially installed wheel). This module must stay importable regardless -- the
+    # spec/parse/ptxas half of it is used from dependency-light contexts, and every test relies on
+    # that.
     _drv = None
 
 
@@ -44,8 +48,8 @@ def _chk(ret):
         name = _drv.cuGetErrorString(err)[1]
         try:
             name = name.decode()
-        except Exception:
-            pass
+        except (AttributeError, UnicodeDecodeError):
+            pass  # already str, or undecodable bytes -- either way, report it as-is below
         raise RuntimeError(f"CUDA driver error: {err} ({name})")
     rest = ret[1:]
     return rest[0] if len(rest) == 1 else rest
@@ -79,7 +83,7 @@ def _ensure_init(device: int = 0):
 # --------------------------------------------------------------------------------------
 # PTX parsing
 # --------------------------------------------------------------------------------------
-_ENTRY_RE = re.compile(r"\.visible\s+\.entry\s+([\w$]+)\s*\(([^)]*)\)", re.S)
+_ENTRY_RE = re.compile(r"\.visible\s+\.entry\s+([\w$]+)\s*\(([^)]*)\)", re.DOTALL)
 _TARGET_RE = re.compile(r"\.target\s+(sm_\w+)")
 
 
@@ -287,7 +291,7 @@ def ptxas_compile(ptx: str, ptxas: str, arch: str | None = None, acf_path: str |
         cmd = [ptxas, f"-arch={arch}", pf.name, "-o", cf.name, *extra_args]
         if acf_path:
             cmd.append(f"--apply-controls={acf_path}")
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if r.returncode != 0:
             raise RuntimeError(f"ptxas failed (rc={r.returncode}): {r.stderr.strip()}\n  cmd: {' '.join(cmd)}")
         with open(cf.name, "rb") as f:
@@ -564,8 +568,8 @@ def build_tensormaps(spec, tensors):
 
     try:
         from triton.backends.nvidia.driver import TMA_DTYPE_DEVICE_TO_HOST as _D2H
-    except Exception:
-        _D2H = {i: i for i in range(16)}
+    except Exception:  # noqa: BLE001 - private triton API; absent OR moved OR renamed across
+        _D2H = {i: i for i in range(16)}  # versions, so fall back to identity rather than break.
     fill = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled
     objs, addrs = [], []
     for td in tds:

@@ -11,4 +11,4 @@ service) are injected out-of-tree and implement the same ABC.
 from .base import Store
 from .local import DEFAULT_STORE_ENV, LocalStore, default_store_root
 
-__all__ = ["Store", "LocalStore", "default_store_root", "DEFAULT_STORE_ENV"]
+__all__ = ["DEFAULT_STORE_ENV", "LocalStore", "Store", "default_store_root"]
