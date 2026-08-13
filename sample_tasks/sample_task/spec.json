@@ -1,0 +1,26 @@
+{
+  "spec_version": 1,
+  "entry": "add_kernel",
+  "arch": "sm_100a",
+  "shared": 0,
+  "block": [128, 1, 1],
+  "grid": [8, 1, 1],
+  "ptxas": "",
+  "tensors": [
+    {"shape": [1024], "dtype": "float32", "strides": [1]},
+    {"shape": [1024], "dtype": "float32", "strides": [1]},
+    {"shape": [1024], "dtype": "float32", "strides": [1]}
+  ],
+  "args": [
+    {"t": 0},
+    {"t": 1},
+    {"t": 2},
+    {"i32": 1024},
+    {"null": true},
+    {"null": true}
+  ],
+  "ir_hash": "6cb1f53d5136f5b8e3e3c25727534f6d006f6564d26b0e0b51cfd4826e254000",
+  "ptx_sha256": "6cb1f53d5136f5b8e3e3c25727534f6d006f6564d26b0e0b51cfd4826e254000",
+  "kernel_name": "add_kernel",
+  "fn_name": "add_kernel"
+}

@@ -1,0 +1,63 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ptx-anneal"
+version = "0.0.1"
+description = "Offline ptxas tuning framework (ACF factory) for faster GPU kernels."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Meta Platforms, Inc." }]
+keywords = ["gpu", "cuda", "ptxas", "triton", "kernel", "tuning", "compiler"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: POSIX :: Linux",
+]
+# Core stays light so the ABCs / store / provision import without a GPU stack.
+dependencies = ["packaging"]
+
+[project.optional-dependencies]
+# The driver-launch harness (PTX-direct benchmarking) needs a GPU stack; kept optional.
+harness = ["torch", "triton"]
+# The torch-free scorer (CudaPyRunner / cudapy_worker): only ptxas + the CUDA driver + numpy.
+cudapy = ["cuda-python", "numpy"]
+dev = ["pytest"]
+
+[project.scripts]
+ptx_anneal = "ptx_anneal.cli:main"
+ptx-anneal = "ptx_anneal.cli:main"
+
+# Plugin discovery: targets and search engines register here. The CompileIQ engine
+# and any out-of-tree store/runner are injected this way (bring-your-own), never vendored.
+[project.entry-points."ptx_anneal.targets"]
+ptx = "ptx_anneal.target.ptx:PtxTarget"
+
+[project.entry-points."ptx_anneal.search_backends"]
+# (none shipped; engines are bring-your-own and registered out-of-tree)
+
+[project.urls]
+Homepage = "https://github.com/facebookexperimental/ptx-anneal"
+Repository = "https://github.com/facebookexperimental/ptx-anneal"
+Issues = "https://github.com/facebookexperimental/ptx-anneal/issues"
+
+[tool.hatch.build.targets.wheel]
+# The shippable binary is the torch-free core package only. Test/validation dirs
+# (tests, sample_tasks, e2e) are never in the wheel.
+packages = ["ptx_anneal"]
+
+[tool.hatch.build.targets.sdist]
+# sample_tasks = torch-free task fixtures (data). e2e/ is DELIBERATELY excluded: it is a
+# torch+triton adhoc validation harness (see e2e/README.md), never packaged.
+include = ["ptx_anneal", "skills", "tests", "sample_tasks", "README.md", "LICENSE", "AGENTS.md"]
+exclude = ["e2e", "e2e/**"]

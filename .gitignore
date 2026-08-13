@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Packaging / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+pip-wheel-metadata/
+
+# ptx-anneal local artifacts (never commit tuning stores/tasks/cubins)
+*.acf
+*.acf.cubin
+*.acf.json
+ptx_anneal_store/
+ptx_anneal_tasks/
+
+# Local engine artifacts and binary blobs — do not commit (engine is bring-your-own)
+*.bin
+
+# Site scaffolding that needs a build system (e.g. the buck-built validation frontend) — never
+# published. Nothing in the public tree may require it: `ptx_anneal` and the MODE=tune factory
+# validation must stay fully runnable from a plain git checkout with no build system at all.
+fb/
+
+# Re-include package subdirs shadowed by the repo-wide fbcode/.gitignore, which ignores generic
+# build-dir names (run/search/store/log/target). Those collide with this package's subpackages, so
+# without these negations new files under them are silently dropped from tracking.
+!ptx_anneal/run/
+!ptx_anneal/search/
+!ptx_anneal/store/
+!ptx_anneal/log/
+!ptx_anneal/target/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
