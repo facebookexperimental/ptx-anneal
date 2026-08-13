@@ -42,9 +42,9 @@ outlined on that page and do not file a public issue.
 [`ruff`](https://docs.astral.sh/ruff/) for linting, configured under `[tool.ruff]`
 in `pyproject.toml`.
 
-* Line length is 120 characters (enforced: `E501`, plus `I`/`UP`/`B`).
-* CI gates on `ruff check` only. Formatting is **not** normalized in this tree, so
-  don't run `ruff format` as a drive-by — it would reformat unrelated files.
+* Line length is 120 characters (enforced: `E501`, plus `I`/`UP`/`B` and the codes
+  the internal linter enforces — see `[tool.ruff.lint]`).
+* CI gates on both `ruff check` and `ruff format --check`.
 * Every source file must carry the Meta copyright header found in the existing
   files.
 * Run the tests with `pytest` before sending a pull request. They are CPU-only:
@@ -52,9 +52,14 @@ in `pyproject.toml`.
 
 ```bash
 pip3 install -e ".[dev]"
-ruff check .
+ruff check --fix . && ruff format .   # apply
+ruff check . && ruff format --check . # what CI runs
 pytest
 ```
+
+`ruff` is pinned in the `dev` extra so a new release can't turn CI red on an
+unrelated PR. Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once
+per clone to keep `git blame` readable across the one bulk reformat.
 
 ## License
 

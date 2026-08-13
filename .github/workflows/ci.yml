@@ -70,7 +70,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install .[dev]
-      # `ruff check` only. Formatting is not normalized in this tree, so `ruff format --check` would
-      # fail on existing files; run it deliberately, not as a CI side effect. Config: [tool.ruff].
+      # Config for both: [tool.ruff] / [tool.ruff.lint] in pyproject.toml. The lint ruleset is a
+      # superset of what the internal (fbsource) linter enforces -- development is git-first, so a
+      # finding must surface here rather than on the way into fbcode.
       - name: Lint (ruff check)
         run: ruff check .
+      - name: Format (ruff format --check)
+        run: ruff format --check .
