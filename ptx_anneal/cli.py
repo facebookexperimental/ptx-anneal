@@ -3,10 +3,12 @@
 # LICENSE file in the root directory of this source tree.
 """The ``ptx_anneal`` command-line interface -- one binary for the whole ACF factory.
 
-    ptx_anneal --ss <ss> --task <task_dir> [--output <store>]
+    ptx_anneal --task <task_dir> [--output <store>] [--ss <ss>]
     ptx_anneal doctor
 
-Per-run surface is just the task + search space; the engine and ptxas are provisioning (env), not flags.
+Per-run surface is just the task; the engine, its search space and ptxas are all provisioning, and
+each self-provisions by default (pip-installed engine, fetched search-space catalog, discovered
+ptxas). ``--ss`` only exists to pin a specific search space.
 
 The harness is engine-free: it assembles/benchmarks candidates with ptxas + the CUDA driver
 (``_score``) and admits the winner. The search *engine* (NVIDIA CompileIQ, or an in-house one) is
@@ -43,15 +45,10 @@ INVALID = float("inf")
 
 
 def _resolve_ptxas(args) -> str | None:
-    import shutil
-
-    return (
-        getattr(args, "ptxas", None)
-        or os.environ.get("PTXAS")
-        or os.environ.get("TRITON_PTXAS_BLACKWELL_PATH")
-        or os.environ.get("TRITON_PTXAS_PATH")
-        or shutil.which("ptxas")
-    )
+    # An explicit flag/env is honoured verbatim; everything else goes through the shared discovery
+    # path (env -> PATH -> pip-installed nvidia-cuda-nvcc wheel) so `doctor` and `tune` can never
+    # disagree about which ptxas this box would use.
+    return getattr(args, "ptxas", None) or os.environ.get("PTXAS") or provision.find_ptxas()
 
 
 def _harness_cmd() -> list[str]:
@@ -94,8 +91,7 @@ def _score_one(task_dir: str, acf: str | None, warmup: int, rep: int, bench: str
 
 # -- tune: baseline -> spawn engine adapter -> admit ----------------------------------------------
 def _cmd_tune(args) -> int:
-    if not args.task:
-        raise SystemExit("ptx_anneal: --task <task_dir> is required")
+    # --task is enforced by the parser (build_parser), so no check here.
     ptxas = _resolve_ptxas(args)
     if not ptxas:
         raise SystemExit("ptx_anneal: no ptxas (set --ptxas / PTXAS / TRITON_PTXAS_BLACKWELL_PATH, or add to PATH)")
@@ -175,6 +171,13 @@ def _cmd_tune(args) -> int:
             "target": target.name, "arch": arch, "ir_hash": ir_hash, "entry": t.spec.get("entry"),
             "baseline_ms": baseline_ms, "best_ms": best_ms, "search_win": win, "forced": not is_win,
             "evaluated": evaluated, "engine": engine_name, "valid": valid, "ptxas_version": ver,
+            # Which search space produced this ACF. The search space is a tuning *input*, and the
+            # engine resolves it to "latest" by default, so recording it is what keeps an admitted
+            # ACF explainable (and a pinned CIQ_SS_TAG meaningful) after the catalog moves on.
+            "search_space": res.get("search_space") or None,
+            # Which engine build produced it. `engine` above is just the adapter's name; an engine is
+            # an installed library with no path to print, so the adapter reports its own identity.
+            "engine_info": res.get("engine_info") or None,
         }
         # Write VERSION-TAGGED ("<ir_hash>.<ptxas>.acf"): an ACF is bound to the ptxas that produced it
         # (a mismatched ptxas rejects it), so scope it by ptxas version -- one kernel keeps a distinct
@@ -206,27 +209,67 @@ def _cmd_doctor() -> int:
     return 0
 
 
+# `doctor` and `_score` are intercepted in main() before the parser sees them, so argparse cannot
+# advertise them on its own -- spell the real surface out here. `_score` stays undocumented: it is
+# the internal per-candidate scorer the adapter calls back into, not a user command.
+_USAGE = "ptx_anneal --task <dir> [--output <store>] [options]\n       ptx_anneal doctor"
+
+_EPILOG = """\
+knobs with no flag (environment only):
+  PTX_ANNEAL_FORCE_ADMIT   admit the best valid candidate even when it did not beat the baseline
+                           (smoke knob: guarantees a real ACF lands so consume can be exercised)
+  CIQ_POOL / CIQ_GENERATIONS         engine budget (default 8 / 1 -- one batch, no evolution)
+  CIQ_SS_TAG / CIQ_SS_VERSION / CIQ_SS_VARIANT   pin the published search-space catalog
+  CIQ_SEARCH_SPACES_DIR    offline search-space mirror (no network)
+
+notes:
+  The exit code does NOT report admission -- 0 means the run completed, not that an ACF was
+  admitted ("no headroom" is an outcome, not an error). To gate on it, match "admitted ACF"
+  in the output.
+
+  The ptxas >= 13.3 floor is fixed, not a default: `--apply-controls` is GA only from there
+  on, so an older ptxas can neither produce nor consume an ACF. A pinned --ptxas is used
+  verbatim even when it is too old -- the whole toolchain must agree on one ptxas.
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="ptx_anneal", description="Offline ptxas ACF tuning (bring-your-own engine).")
-    p.add_argument(
-        "--engine-python", dest="engine_python",
-        help="interpreter that has the engine (default: this interpreter / $PTX_ANNEAL_ENGINE_PYTHON)",
+    p = argparse.ArgumentParser(
+        prog="ptx_anneal",
+        usage=_USAGE,
+        description="Offline ptxas ACF tuning. The engine, its search space and ptxas all "
+        "self-provision, so `--task <dir>` on its own is a complete invocation.",
+        epilog=_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument(
-        "--engine-adapter", dest="engine_adapter",
-        help="bring-your-own engine adapter script (default: bundled CompileIQ / $PTX_ANNEAL_ENGINE_ADAPTER)",
-    )
-    p.add_argument("--ss", help="engine search-space path")
-    p.add_argument("--task", help="a task directory (kernel.ptx + spec.json)")
-    p.add_argument("--output", "--store", dest="output", help="ACF store root (default: ~/.ptx_anneal/store)")
-    p.add_argument("--ptxas", help="ptxas to use (else $PTXAS / $TRITON_PTXAS_BLACKWELL_PATH / PATH)")
-    p.add_argument("--target", default="ptx", help="target (default: ptx)")
-    p.add_argument("--warmup", type=int, default=25, help="benchmark warmup iters")
-    p.add_argument("--rep", type=int, default=50, help="benchmark measured iters")
-    p.add_argument(
+
+    g = p.add_argument_group("task")
+    # Required here rather than checked later: it always was mandatory, and a late SystemExit is a
+    # worse error than argparse's usage message.
+    g.add_argument("--task", required=True, help="a task directory (kernel.ptx + spec.json)")
+    g.add_argument("--output", "--store", dest="output", help="ACF store root (default: ~/.ptx_anneal/store)")
+
+    g = p.add_argument_group("scoring")
+    g.add_argument(
         "--bench", choices=["cudagraph", "do_bench"], default="cudagraph",
         help="scoring metric: cudagraph (fast/deterministic, default) or do_bench (L2-flush median, "
         "faithful to the consumer's A/B)",
+    )
+    g.add_argument("--warmup", type=int, default=25, help="benchmark warmup iters (default: %(default)s)")
+    g.add_argument("--rep", type=int, default=50, help="benchmark measured iters (default: %(default)s)")
+    g.add_argument("--target", default="ptx", help="target (default: %(default)s)")
+
+    g = p.add_argument_group("provisioning pins", "all optional -- each of these self-provisions")
+    g.add_argument("--ptxas", help="ptxas to use (else $PTXAS / $TRITON_PTXAS_BLACKWELL_PATH / PATH / "
+                                   "an installed nvidia-cuda-nvcc wheel)")
+    g.add_argument("--ss", help="engine search-space path (else the engine fetches its published catalog)")
+    g.add_argument(
+        "--engine-python", dest="engine_python",
+        help="interpreter that has the engine (default: this interpreter / $PTX_ANNEAL_ENGINE_PYTHON)",
+    )
+    g.add_argument(
+        "--engine-adapter", dest="engine_adapter",
+        help="bring-your-own engine adapter script (default: bundled CompileIQ / $PTX_ANNEAL_ENGINE_ADAPTER)",
     )
     return p
 

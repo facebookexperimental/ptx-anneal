@@ -1,9 +1,10 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
-# Licensed under the BSD-style license found in the LICENSE file.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 #
-# Test CI. All tests are CPU-only (no GPU / torch / triton needed);
-# the GPU harness + cudapy scorer are exercised only in the offline factory.
-# Linting is owned by the internal (fbsource) linter, not this OSS mirror.
+# Test CI. All tests are CPU-only: nothing here needs a GPU, torch, triton or cuda-python
+# (`ptx_launch` guards its cuda import; torch/triton are imported inside functions). The GPU
+# harness + cudapy scorer are exercised only in the offline factory / e2e, never here.
 
 name: ci
 
@@ -22,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,3 +35,42 @@ jobs:
           python -m pip install .[dev]
       - name: Test (pytest)
         run: pytest -q
+
+  # Guards the support-matrix claim in README/AGENTS: the store/ABC/doctor layer is pure Python and
+  # must install and run with NO extras -- no GPU, no engine, no cuda-python. A future edit that
+  # promotes an extra (e.g. compileiq, which is >=3.11,<3.14 + glibc 2.34) into base `dependencies`
+  # would silently break that; this job is what catches it. Runs on the OLDEST supported Python,
+  # since that is what such an edit narrows first.
+  bare-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install with no extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+      - name: Import and run doctor
+        run: |
+          cd "$(mktemp -d)"   # outside the checkout: prove it works from the installed package
+          python -c "import ptx_anneal, ptx_anneal.store, ptx_anneal.search, ptx_anneal.target"
+          python -c "import ptx_anneal.provision as p; print(p.format_report(p.report()))"
+          ptx-anneal doctor
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .[dev]
+      # `ruff check` only. Formatting is not normalized in this tree, so `ruff format --check` would
+      # fail on existing files; run it deliberately, not as a CI side effect. Config: [tool.ruff].
+      - name: Lint (ruff check)
+        run: ruff check .

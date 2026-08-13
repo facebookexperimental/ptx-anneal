@@ -20,14 +20,40 @@ If you add a build target/manifest, keep `e2e/` out of it.
 ```bash
 ./e2e.sh                                   # factory-only smoke on ../sample_tasks/sample_task
 TASK=../sample_tasks/<name> ./e2e.sh       # a different captured task
+CIQ_SS_TAG=search-spaces-YYYY.MM.DD ./e2e.sh   # pin the search-space catalog (reproducible)
 MODE=full ./e2e.sh                         # 3-step collect -> factory -> consume (synth_acf)
 MODE=full ./e2e.sh synth_acf ws_gemm       # ... on specific registered kernels
 ```
 
 `MODE=tune` (default) runs the **factory only** — search → score → admit; no frontend, no
-collect/consume. Env: `GPU`, `BENCH` (`cudagraph`|`do_bench`), `FORCE_ADMIT`, `PTXAS` (ptxas ≥ 13.3),
-`SS` / `$COMPILE_IQ_SEARCH_SPACE_BIN` (CompileIQ search space), `PYTHON` (env with the factory deps),
-`STORE`.
+collect/consume. With `compileiq` installed it needs no arguments at all: `ptxas` is discovered
+(`$PTXAS` → `PATH` → the `nvidia-cuda-nvcc` wheel) and the engine fetches its own search space.
+
+Env, all optional: `GPU`, `BENCH` (`cudagraph`|`do_bench`), `FORCE_ADMIT`, `PTXAS` (pin a ptxas ≥
+13.3), `SS` / `$COMPILE_IQ_SEARCH_SPACE_BIN` (pin a search-space `.bin`), `CIQ_SS_TAG` /
+`CIQ_SS_VERSION` / `CIQ_SS_VARIANT` (pin a published catalog), `CIQ_SEARCH_SPACES_DIR` (offline
+mirror), `CIQ_POOL` / `CIQ_GENERATIONS` (engine budget), `PYTHON`, `TASK`, `STORE`.
+
+`FORCE_ADMIT` defaults to **1** here (the CLI's default is off): the smoke wants a real,
+different-from-baseline ACF in the store so the consume path is exercised even on a kernel with no
+headroom. Such an ACF is tagged `[FORCE_ADMIT: ...]` and `"forced": true` in its sidecar. Set
+`FORCE_ADMIT=0` to make admission a genuine gate.
+
+The `CIQ_*` vars are the engine's, read by the adapter — this script only passes your environment
+through and deliberately sets no defaults for them, so there is one source of truth per knob.
+
+The run identifies every input that can change the result:
+
+```
+ptxas=<path> (V13.3) ; engine-python=<python> ; adapter=compileiq_adapter.py ; task=<dir>
+baseline: 0.0010 ms (bench=cudagraph)
+engine: compileiq 1.0.0.dev1 from <site-packages>/compileiq (python=<python>)
+search space: ptxas13.3_search_space.bin [cache search-spaces-2026.05.22]
+```
+
+The harness pins `PYTHONPATH` to this checkout before invoking `ptx_anneal`. It runs from `e2e/`, so
+an editable `ptx_anneal` install pointing elsewhere would otherwise be imported instead — and the
+whole point of `MODE=tune` is to validate *this* tree.
 
 **`MODE=tune` is the portable one.** It is pure Python + `ptxas` + the engine, so it must keep
 working from a plain git checkout with no build system. Do not add a build-system dependency to it.
