@@ -31,8 +31,13 @@ class Store(ABC):
 
     @abstractmethod
     def write(
-        self, target: str, arch: str, ir_hash: str, data: bytes,
-        meta: dict | None = None, toolchain_version: str = "",
+        self,
+        target: str,
+        arch: str,
+        ir_hash: str,
+        data: bytes,
+        meta: dict | None = None,
+        toolchain_version: str = "",
     ) -> str:
         """Admit an artifact (and optional sidecar). Returns an identifier (e.g. a path).
 

@@ -10,4 +10,4 @@ registered plugins discovered via the ``ptx_anneal.targets`` entry-point group.
 
 from .base import Target, available_targets, load_target
 
-__all__ = ["Target", "load_target", "available_targets"]
+__all__ = ["Target", "available_targets", "load_target"]

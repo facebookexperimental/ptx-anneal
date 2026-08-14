@@ -50,7 +50,7 @@ class CudaPyRunner(Runner):
         """
         cmd = [self.worker_python, "-m", _WORKER_MODULE, task.dir, artifact_path or "NONE", str(warmup), str(rep)]
         try:
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             return INVALID  # wedged / too-slow candidate: reaped at timeout, scored INVALID
         for line in out.stdout.splitlines():

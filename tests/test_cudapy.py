@@ -37,7 +37,9 @@ def test_load_backend_unknown_name_still_errors_clearly():
 def _runner_with_fake(monkeypatch, *, stdout=None, raise_timeout=False):
     r = CudaPyRunner(worker_python="/bin/true")
 
-    def fake_run(cmd, capture_output, text, timeout):
+    # **kwargs, not a fixed signature: this stands in for subprocess.run, so it must tolerate the
+    # caller passing kwargs the test doesn't care about (e.g. an explicit check=False).
+    def fake_run(cmd, *, timeout=None, **kwargs):
         if raise_timeout:
             raise subprocess.TimeoutExpired(cmd, timeout)
         return SimpleNamespace(stdout=stdout, stderr="")

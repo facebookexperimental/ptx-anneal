@@ -82,8 +82,13 @@ class LocalStore(Store):
             return None
 
     def write(
-        self, target: str, arch: str, ir_hash: str, data: bytes,
-        meta: dict | None = None, toolchain_version: str = "",
+        self,
+        target: str,
+        arch: str,
+        ir_hash: str,
+        data: bytes,
+        meta: dict | None = None,
+        toolchain_version: str = "",
     ) -> str:
         p = self._acf_path(arch, ir_hash, toolchain_version)
         os.makedirs(os.path.dirname(p), exist_ok=True)

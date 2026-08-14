@@ -25,8 +25,11 @@
 # Usage:   e2e.sh                              # MODE=tune on ../sample_tasks/sample_task
 #          TASK=../sample_tasks/<name> e2e.sh  # a different captured task
 #          MODE=full e2e.sh [kernel ...]       # 3-step collect->factory->consume (needs the hook)
-# Env [default]: GPU[0] BENCH[cudagraph] FORCE_ADMIT[1] PTXAS[PATH] SS[$COMPILE_IQ_SEARCH_SPACE_BIN]
+# Env [default]: GPU[0] BENCH[cudagraph] FORCE_ADMIT[1] PTXAS[discovered] SS[engine fetches it]
 #   PYTHON[python3] TASK STORE   (the hook may add its own; see fb/e2e_internal.sh)
+#
+# PTXAS and SS are both optional: the factory discovers ptxas (env -> PATH -> nvidia-cuda-nvcc
+# wheel) and the engine fetches its published search-space catalog. Set either one to pin it.
 set -euo pipefail
 
 MODE="${MODE:-tune}"
@@ -35,17 +38,22 @@ WORK="${WORK:-/tmp/ptx_anneal_e2e}"
 BENCH="${BENCH:-cudagraph}"
 FORCE_ADMIT="${FORCE_ADMIT:-1}"
 PYTHON="${PYTHON:-python3}"
-CIQ_POOL="${CIQ_POOL:-8}"; CIQ_GENERATIONS="${CIQ_GENERATIONS:-1}"; CIQ_CULL="${CIQ_CULL:-4}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
 FBCODE="$(cd "$HERE/../../../.." 2>/dev/null && pwd || true)"
 HARNESS_PY="${HARNESS_PY:-$PYTHON}"
+# Every harness python call is pinned to THIS checkout. `-m ptx_anneal.cli` resolves through
+# sys.path, and this script runs from e2e/ -- so an editable install pointing somewhere else (an
+# fbcode tree, say) would otherwise win silently, and this harness exists to validate the checkout
+# it ships in.
+HARNESS_PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 
 # The ptxas floor has ONE source of truth: the package enforces it, this script only reports/uses it.
 # Hardcoding it here too would be the very failure this harness exists to catch -- two components
 # disagreeing about a ptxas version. The literal is a fallback for when ptx_anneal is not importable
 # yet (uninstalled checkout); the factory would fail on its own gate later anyway.
-MIN_PTXAS="$("$HARNESS_PY" -c 'from ptx_anneal.provision import MIN_PTXAS; print(MIN_PTXAS)' 2>/dev/null || echo 13.3)"
+MIN_PTXAS="$(PYTHONPATH="$HARNESS_PYTHONPATH" "$HARNESS_PY" -c 'from ptx_anneal.provision import MIN_PTXAS; print(MIN_PTXAS)' 2>/dev/null || echo 13.3)"
 
 # Optional site hook -- absent in a plain git checkout (it is ShipIt-stripped). It may set toolchain
 # defaults (e.g. an in-repo ptxas) and define run_full() to provide MODE=full. Sourced before the
@@ -56,24 +64,38 @@ if [[ -n "${_HOOK:-}" && -f "$_HOOK" ]]; then
   source "$_HOOK"
 fi
 
-PTXAS="${PTXAS:-ptxas}"
+# Empty by default -- see the header. Left unset, the factory/engine provision themselves.
+PTXAS="${PTXAS:-}"
 SS="${SS:-${COMPILE_IQ_SEARCH_SPACE_BIN:-}}"
 ENGINE_PY="${ENGINE_PY:-$HARNESS_PY}"
-
-if [[ -z "$SS" ]]; then
-  echo "e2e: no engine search space -- set SS=<path> or \$COMPILE_IQ_SEARCH_SPACE_BIN" >&2; exit 2
-fi
 
 # Run the factory (ptx_anneal.cli) on one task: search -> score -> admit into <store_dir>. Shared by
 # both modes. Returns 0 iff an ACF was admitted.
 run_factory() {  # <task_dir> <store_dir> <logfile>
   local task="$1" store="$2" log="$3"
-  CUDA_VISIBLE_DEVICES="$GPU" \
-    env PTXAS="$PTXAS" TRITON_PTXAS_BLACKWELL_PATH="$PTXAS" PTX_ANNEAL_ENGINE_PYTHON="$ENGINE_PY" \
-      PTX_ANNEAL_PTXAS_TIMEOUT="${PTX_ANNEAL_PTXAS_TIMEOUT:-120}" PTX_ANNEAL_FORCE_ADMIT="$FORCE_ADMIT" \
-      CIQ_POOL="$CIQ_POOL" CIQ_GENERATIONS="$CIQ_GENERATIONS" CIQ_CULL="$CIQ_CULL" \
-      "$HARNESS_PY" -m ptx_anneal.cli --ptxas "$PTXAS" --ss "$SS" \
-        --task "$task" --output "$store" --bench "$BENCH" 2>&1 | tee "$log"
+  local args=(--task "$task" --output "$store" --bench "$BENCH")
+  local envs=(
+    PYTHONPATH="$HARNESS_PYTHONPATH"
+    PTX_ANNEAL_ENGINE_PYTHON="$ENGINE_PY"
+    PTX_ANNEAL_FORCE_ADMIT="$FORCE_ADMIT"
+  )
+  # No PTX_ANNEAL_PTXAS_TIMEOUT: nothing reads it. Setting it advertised a per-candidate timeout the
+  # CLI path does not actually have (the library path's CudaPyRunner does) -- see
+  # skills/factory-search.md#isolation--safety.
+  # CIQ_POOL / CIQ_GENERATIONS are deliberately NOT set here: the engine budget belongs to the
+  # adapter, which already defaults them. Restating those defaults would put one value in two
+  # places -- the exact failure the MIN_PTXAS note above warns about. The caller's env passes
+  # through untouched, so `CIQ_GENERATIONS=5 ./e2e.sh` still works.
+  # Pin ptxas only when the caller pinned it: an empty --ptxas would beat the factory's own
+  # discovery, and TRITON_PTXAS_BLACKWELL_PATH is what the frontend reads, so the two must agree.
+  if [[ -n "$PTXAS" ]]; then
+    envs+=(PTXAS="$PTXAS" TRITON_PTXAS_BLACKWELL_PATH="$PTXAS")
+    args+=(--ptxas "$PTXAS")
+  fi
+  if [[ -n "$SS" ]]; then
+    args+=(--ss "$SS")
+  fi
+  CUDA_VISIBLE_DEVICES="$GPU" env "${envs[@]}" "$HARNESS_PY" -m ptx_anneal.cli "${args[@]}" 2>&1 | tee "$log"
   grep -q "admitted ACF" "$log"
 }
 

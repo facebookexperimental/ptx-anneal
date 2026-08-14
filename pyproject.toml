@@ -32,7 +32,14 @@ dependencies = ["packaging"]
 harness = ["torch", "triton"]
 # The torch-free scorer (CudaPyRunner / cudapy_worker): only ptxas + the CUDA driver + numpy.
 cudapy = ["cuda-python", "numpy"]
-dev = ["pytest"]
+# The reference search engine. An extra rather than a base dependency for support-matrix reasons:
+# compileiq is >=3.11,<3.14 and needs glibc >= 2.34, while the store/ABC/doctor layer above is pure
+# Python and should stay installable anywhere. The harness never imports it either way -- it is
+# reached only through an adapter subprocess (see ptx_anneal/adapters/).
+compileiq = ["compileiq"]
+# ruff is pinned: it is a CI gate, so an unpinned release can turn the build red with no code
+# change (and it would do it on someone else's PR). Bump deliberately.
+dev = ["pytest", "ruff==0.15.*"]
 
 [project.scripts]
 ptx_anneal = "ptx_anneal.cli:main"
@@ -50,6 +57,33 @@ ptx = "ptx_anneal.target.ptx:PtxTarget"
 Homepage = "https://github.com/facebookexperimental/ptx-anneal"
 Repository = "https://github.com/facebookexperimental/ptx-anneal"
 Issues = "https://github.com/facebookexperimental/ptx-anneal/issues"
+
+[tool.ruff]
+# 120 is the documented style (see CONTRIBUTING.md). Configured here rather than assumed: with no
+# config ruff defaults to 88, so the number in the docs was not actually enforced by anything.
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# Defaults (E4/E7/E9 + F) plus: E501 line length, I import order, UP pyupgrade, B bugbear, and the
+# individual codes the internal (fbsource) linter enforces. Development is git-first, so this config
+# must be a SUPERSET of anything internal -- otherwise a change lands green here and only fails once
+# it reaches fbcode, which is the slowest place to find out.
+#
+# Codes, not families, on purpose: selecting the whole families (BLE,S,PL,FURB,RUF,PIE,C4,SIM) is
+# ~256 findings of mostly style churn. Add a code here when something starts enforcing it.
+extend-select = [
+    "E501", "I", "UP", "B",
+    "BLE001",   # blind `except Exception` -- allowed only with a `# noqa: BLE001 - <reason>`
+    "PLW1510",  # subprocess.run without an explicit check=
+    "S110",     # try/except/pass
+    "FURB167",  # regex alias (re.S -> re.DOTALL)
+    "RUF022",   # __all__ not sorted
+    "PIE807",   # `lambda: []` instead of `list`
+    "C408",     # dict() call instead of a literal
+    "SIM115",   # open() without a context manager
+    "PLR0124",  # name compared with itself
+]
 
 [tool.hatch.build.targets.wheel]
 # The shippable binary is the torch-free core package only. Test/validation dirs

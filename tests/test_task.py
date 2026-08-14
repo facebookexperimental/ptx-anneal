@@ -13,6 +13,12 @@ from ptx_anneal import task
 SAMPLE_TASK = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_tasks", "sample_task")
 
 
+def _spec() -> dict:
+    """A fresh copy of the sample spec, so each test can mutate it freely."""
+    with open(os.path.join(SAMPLE_TASK, "spec.json")) as f:
+        return json.load(f)
+
+
 def test_load_sample_task():
     t = task.load(SAMPLE_TASK)
     assert t.entry == "add_kernel"
@@ -25,27 +31,27 @@ def test_load_sample_task():
 
 
 def test_spec_version_absent_is_v1():
-    spec = json.load(open(os.path.join(SAMPLE_TASK, "spec.json")))
+    spec = _spec()
     spec.pop("spec_version", None)
     task.validate_spec(spec)  # must not raise; legacy tasks have no spec_version
 
 
 def test_legacy_ptx_sha256_alias():
-    spec = json.load(open(os.path.join(SAMPLE_TASK, "spec.json")))
+    spec = _spec()
     spec.pop("ir_hash", None)  # only the legacy alias remains
     assert task.spec_ir_hash(spec) == spec["ptx_sha256"]
     task.validate_spec(spec)
 
 
 def test_missing_required_field_rejected():
-    spec = json.load(open(os.path.join(SAMPLE_TASK, "spec.json")))
+    spec = _spec()
     spec.pop("entry")
     with pytest.raises(task.TaskError):
         task.validate_spec(spec)
 
 
 def test_unsupported_spec_version_rejected():
-    spec = json.load(open(os.path.join(SAMPLE_TASK, "spec.json")))
+    spec = _spec()
     spec["spec_version"] = 999
     with pytest.raises(task.TaskError):
         task.validate_spec(spec)

@@ -23,12 +23,18 @@ def test_engine_overrides_parse():
 
 
 def test_output_aliases_store():
-    assert cli.build_parser().parse_args(["--store", "/o"]).output == "/o"
+    assert cli.build_parser().parse_args(["--task", "/t", "--store", "/o"]).output == "/o"
 
 
 def test_unknown_flag_rejected():
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["--bogus"])
+
+
+def test_task_is_required():
+    # The parser owns this, not a late SystemExit from _cmd_tune -- so the user gets a usage message.
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--output", "/o"])
 
 
 def test_score_parser():

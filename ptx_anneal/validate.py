@@ -17,6 +17,7 @@ default tolerance is overridable via ``PTX_ANNEAL_REL_TOL``.
 
 from __future__ import annotations
 
+import math
 import os
 from abc import ABC, abstractmethod
 
@@ -46,8 +47,9 @@ class RelTolValidator(Validator):
 
     def check(self, deviations: list[float]) -> None:
         for dd in deviations:
-            # `dd == dd` is the NaN guard (NaN != NaN); rejects NaN / +inf / over-tolerance.
-            if not (dd == dd and dd <= self.rel_tol):
+            # Reject NaN explicitly: a NaN deviation means the candidate produced garbage, and every
+            # comparison against it is False, so it would otherwise slip through a `<=` test.
+            if math.isnan(dd) or dd > self.rel_tol:
                 raise ValidationError(f"candidate diverged (rel={dd} > tol={self.rel_tol})")
 
 

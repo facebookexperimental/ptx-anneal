@@ -41,19 +41,57 @@ def _version_tuple(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
 
 
+def _wheel_ptxas() -> list[str]:
+    """ptxas binaries shipped by the ``nvidia-cuda-nvcc`` wheels, newest CUDA major first.
+
+    A pip-installed ptxas is not on ``PATH``. Without looking here, a box whose only new-enough
+    ptxas came from a wheel -- the normal outcome of provisioning by pip, and the one the "no
+    vendored binaries" rule pushes people toward -- reports as unprovisioned.
+    """
+    import glob
+    import sysconfig
+
+    found: list[str] = []
+    for key in ("purelib", "platlib"):
+        root = sysconfig.get_paths().get(key)
+        if root:
+            found += glob.glob(os.path.join(root, "nvidia", "cu*", "bin", "ptxas"))
+    return sorted({p for p in found if os.path.exists(p)}, reverse=True)
+
+
 def find_ptxas() -> str | None:
-    """The ptxas ptx-anneal would use: explicit env first, then PATH."""
+    """The ptxas ptx-anneal would use: explicit env, then PATH, then a pip-installed wheel.
+
+    An explicitly pointed-at ptxas is returned verbatim even when it is too old. The whole
+    toolchain -- collect, factory, consume -- must agree on ONE ptxas, so silently substituting a
+    different one would trade a loud version error for a silent store MISS later.
+
+    With nothing pinned, prefer the first candidate that MEETS the floor rather than the first one
+    found: a PATH ptxas below MIN_PTXAS cannot apply an ACF at all, so letting it shadow a new
+    enough wheel would fail a box that is in fact provisioned. If none qualify, return the first so
+    the caller still reports what it saw.
+    """
     for env in ("TRITON_PTXAS_BLACKWELL_PATH", "TRITON_PTXAS_PATH"):
         p = os.environ.get(env)
         if p and os.path.exists(p):
             return p
-    return shutil.which("ptxas")
+
+    on_path = shutil.which("ptxas")
+    candidates = ([on_path] if on_path else []) + [p for p in _wheel_ptxas() if p != on_path]
+    need = _version_tuple(MIN_PTXAS)
+    for c in candidates:
+        v = ptxas_version(c)
+        if v and _version_tuple(v) >= need:
+            return c
+    return candidates[0] if candidates else None
 
 
 def ptxas_version(path: str) -> str | None:
     try:
-        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20).stdout
-    except Exception:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        # Not executable, wrong arch, hung past the timeout: "unknown version", not a crash. The
+        # caller decides (an unparseable version simply fails the floor check).
         return None
     m = re.search(r"release\s+([0-9]+\.[0-9]+)", out)
     if m:
@@ -73,13 +111,19 @@ def min_ptxas() -> str:
 
 
 def gpu_status() -> dict:
-    """Whether the launch stack (cuda-python + torch + a visible GPU) is available."""
+    """Whether the launch stack (cuda-python + torch + a visible GPU) is available.
+
+    Every probe here is best-effort by design: this backs ``doctor``, whose entire job is to report
+    what is missing. An absent or broken optional dependency is the answer, not an error -- so the
+    blind excepts below are deliberate, and must stay blind: a half-installed torch can raise almost
+    anything on import, and `doctor` failing is strictly worse than `doctor` saying "no GPU".
+    """
     status = {"cuda_python": False, "torch": False, "gpu": False, "detail": ""}
     try:
         import cuda.bindings.driver  # noqa: F401
 
         status["cuda_python"] = True
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - absent/broken cuda-python is a reportable state
         pass
     try:
         import torch
@@ -88,7 +132,7 @@ def gpu_status() -> dict:
         status["gpu"] = bool(torch.cuda.is_available())
         if status["gpu"]:
             status["detail"] = torch.cuda.get_device_name(0)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - ditto for torch / a driver that fails to initialise
         pass
     return status
 
@@ -128,11 +172,12 @@ def format_report(rep: dict) -> str:
     if rep["engines"]:
         lines.append(f"[OK ] engine(s): {', '.join(rep['engines'])}")
     else:
-        lines.append("[-- ] engine: none registered (only the built-in 'baseline' backend)")
-        lines.append("       -> pip-install a bring-your-own engine plugin (e.g. NVIDIA CompileIQ); it self-registers")
-        lines.append(
-            "          under the 'ptx_anneal.search_backends' entry point and appears here — no env var needed."
-        )
+        lines.append("[-- ] engine: no plugin registered (only the built-in 'baseline' backend)")
+        lines.append("       -> this line reports the 'ptx_anneal.search_backends' plugin registry only. `tune` does")
+        lines.append("          NOT need it: it drives the engine through an adapter subprocess, so after")
+        lines.append("          `pip install ptx-anneal[compileiq]` tuning works while this still reads '--'.")
+        lines.append("       -> a plugin is only needed for the library API (factory.tune); install one and it")
+        lines.append("          self-registers under that entry point and appears here — no env var needed.")
 
     g = rep["gpu"]
     if g["gpu"]:

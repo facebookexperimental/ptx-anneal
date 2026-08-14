@@ -17,9 +17,7 @@ _N = 1 << 20  # multiple of _BLOCK -> no masking needed
 
 
 @triton.jit
-def _synth_acf_kernel(
-    x_ptr, y_ptr, BLOCK: tl.constexpr, ITERS: tl.constexpr, NACC: tl.constexpr
-):
+def _synth_acf_kernel(x_ptr, y_ptr, BLOCK: tl.constexpr, ITERS: tl.constexpr, NACC: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     x = tl.load(x_ptr + offs)

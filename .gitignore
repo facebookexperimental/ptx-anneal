@@ -17,6 +17,14 @@ env/
 .ruff_cache/
 .mypy_cache/
 pip-wheel-metadata/
+.tox/
+.nox/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
 
 # ptx-anneal local artifacts (never commit tuning stores/tasks/cubins)
 *.acf
@@ -25,7 +33,11 @@ pip-wheel-metadata/
 ptx_anneal_store/
 ptx_anneal_tasks/
 
-# Local engine artifacts and binary blobs — do not commit (engine is bring-your-own)
+# Local engine artifacts and binary blobs — do not commit (engine is bring-your-own).
+# NOTE this is repo-wide and deliberately also covers engine search-space binaries (the `--ss`
+# argument): those are fetched from the engine's published catalog or mirrored via
+# CIQ_SEARCH_SPACES_DIR, never committed here. If you ever need a .bin as a checked-in fixture it
+# must be force-added (`git add -f`) — otherwise it is silently dropped.
 *.bin
 
 # Site scaffolding that needs a build system (e.g. the buck-built validation frontend) — never

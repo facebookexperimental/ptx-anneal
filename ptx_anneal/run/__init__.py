@@ -15,4 +15,4 @@ from .base import INVALID, Runner
 from .cudapy import CudaPyRunner
 from .local import LocalRunner
 
-__all__ = ["Runner", "LocalRunner", "CudaPyRunner", "INVALID"]
+__all__ = ["INVALID", "CudaPyRunner", "LocalRunner", "Runner"]

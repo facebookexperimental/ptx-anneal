@@ -39,21 +39,27 @@ outlined on that page and do not file a public issue.
 ## Coding Style
 
 `ptx-anneal` is a Python project (targeting Python 3.10+). We use
-[`ruff`](https://docs.astral.sh/ruff/) for linting and formatting, driven by
-[`lintrunner`](https://github.com/suo/lintrunner).
+[`ruff`](https://docs.astral.sh/ruff/) for linting, configured under `[tool.ruff]`
+in `pyproject.toml`.
 
-* Format and lint with `lintrunner` (configuration in `.lintrunner.toml` and
-  `pyproject.toml`).
-* Line length is 120 characters.
+* Line length is 120 characters (enforced: `E501`, plus `I`/`UP`/`B` and the codes
+  the internal linter enforces — see `[tool.ruff.lint]`).
+* CI gates on both `ruff check` and `ruff format --check`.
 * Every source file must carry the Meta copyright header found in the existing
   files.
-* Run the tests with `pytest` before sending a pull request.
+* Run the tests with `pytest` before sending a pull request. They are CPU-only:
+  no GPU, torch, triton or cuda-python required.
 
 ```bash
 pip3 install -e ".[dev]"
-lintrunner --all-files
+ruff check --fix . && ruff format .   # apply
+ruff check . && ruff format --check . # what CI runs
 pytest
 ```
+
+`ruff` is pinned in the `dev` extra so a new release can't turn CI red on an
+unrelated PR. Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once
+per clone to keep `git blame` readable across the one bulk reformat.
 
 ## License
 

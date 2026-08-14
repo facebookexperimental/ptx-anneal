@@ -45,7 +45,7 @@ class LocalRunner(Runner):
             raise ValueError(f"no local worker registered for target {target.name!r}")
         cmd = [self.worker_python, "-m", module, task.dir, artifact_path or "NONE", str(warmup), str(rep)]
         try:
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             return INVALID  # wedged/too-slow candidate: reaped, scored invalid
         for line in out.stdout.splitlines():

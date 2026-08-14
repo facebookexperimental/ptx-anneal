@@ -13,19 +13,19 @@ from ptx_anneal.ptx_launch import _build_kernel_params, _pick_n, build_spec
 
 # --- CUDA-graph unroll count (auto-N) -----------------------------------------------------------
 def test_pick_n_scales_region_to_rep_ms():
-    assert _pick_n(0.5, 100.0) == 200          # 100ms / 0.5ms
+    assert _pick_n(0.5, 100.0) == 200  # 100ms / 0.5ms
     assert _pick_n(2.0, 100.0) == 50
 
 
 def test_pick_n_floor_and_degenerate():
-    assert _pick_n(1000.0, 100.0) == 1         # est bigger than target -> at least 1
-    assert _pick_n(0.0, 100.0) == 1            # nonpositive est -> 1
+    assert _pick_n(1000.0, 100.0) == 1  # est bigger than target -> at least 1
+    assert _pick_n(0.0, 100.0) == 1  # nonpositive est -> 1
     assert _pick_n(float("inf"), 100.0) == 1
     assert _pick_n(float("nan"), 100.0) == 1
 
 
 def test_pick_n_clamped_to_max():
-    assert _pick_n(1e-12, 100.0) == 100000     # tiny est -> clamp at n_max
+    assert _pick_n(1e-12, 100.0) == 100000  # tiny est -> clamp at n_max
 
 
 # --- kernelParams building --------------------------------------------------------------------
@@ -35,7 +35,7 @@ def test_build_kernel_params_len_and_holders():
     assert len(arr) == len(args)
     # ptr/i32/i64/f32/null each back a value holder; tma is passed by value (no holder).
     assert len(holders) == 5
-    assert arr[5] == 0x2000                     # tma slot points straight at the descriptor address
+    assert arr[5] == 0x2000  # tma slot points straight at the descriptor address
 
 
 def test_build_kernel_params_rejects_unknown_kind():
@@ -63,10 +63,15 @@ _ARGS = [("tensor", {"id": 0, "shape": [16], "dtype": "float32", "strides": [1]}
 
 
 def _md(**over):
-    base = dict(
-        global_scratch_size=0, profile_scratch_size=0, num_ctas=1,
-        ctas_per_cga=None, tensordesc_meta=[], num_warps=4, shared=0,
-    )
+    base = {
+        "global_scratch_size": 0,
+        "profile_scratch_size": 0,
+        "num_ctas": 1,
+        "ctas_per_cga": None,
+        "tensordesc_meta": [],
+        "num_warps": 4,
+        "shared": 0,
+    }
     base.update(over)
     return SimpleNamespace(**base)
 

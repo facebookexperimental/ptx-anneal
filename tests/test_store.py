@@ -55,6 +55,39 @@ def test_cubin_cache_tagged_by_toolchain(tmp_path):
     assert all(not e["path"].endswith(".acf.cubin") for e in s.list())
 
 
+def test_acf_is_tagged_by_toolchain_version(tmp_path):
+    # The CLI always passes toolchain_version, so the shipped layout is <hash>.<ptxas>.acf. ACFs from
+    # different ptxas versions must coexist rather than overwrite each other.
+    s = LocalStore(str(tmp_path))
+    p133 = s.write("ptx", ARCH, IR_HASH, b"acf-133", meta={}, toolchain_version="13.3")
+    p134 = s.write("ptx", ARCH, IR_HASH, b"acf-134", meta={}, toolchain_version="13.4")
+    assert p133 == os.path.join(str(tmp_path), ARCH, f"{IR_HASH}.13.3.acf")
+    assert p133 != p134
+    assert s.read("ptx", ARCH, IR_HASH, toolchain_version="13.3") == b"acf-133"
+    assert s.read("ptx", ARCH, IR_HASH, toolchain_version="13.4") == b"acf-134"
+    # an untagged lookup must not silently serve a tagged artifact
+    assert s.read("ptx", ARCH, IR_HASH) is None
+
+
+def test_sidecar_carries_full_provenance(tmp_path):
+    # The search space and engine build are tuning *inputs* that the store key does NOT distinguish
+    # (and the catalog defaults to "latest"), so the sidecar is the only record of which produced a
+    # given ACF. Dropping these fields would make an admitted ACF unexplainable.
+    s = LocalStore(str(tmp_path))
+    meta = {
+        "ptxas_version": "13.3",
+        "engine": "compileiq",
+        "engine_info": {"name": "compileiq", "version": "1.0.0.dev1", "path": "/sp/compileiq", "python": "/py"},
+        "search_space": {"resolved_tag": "search-spaces-2026.05.22", "sha256": "deadbeef", "source": "cache"},
+    }
+    s.write("ptx", ARCH, IR_HASH, ACF, meta=meta, toolchain_version="13.3")
+    got = s.read_meta("ptx", ARCH, IR_HASH, toolchain_version="13.3")
+    assert got["ptxas_version"] == "13.3"
+    assert got["engine_info"]["version"] == "1.0.0.dev1"
+    assert got["search_space"]["resolved_tag"] == "search-spaces-2026.05.22"
+    assert got["search_space"]["sha256"] == "deadbeef"
+
+
 def test_default_store_root_env(monkeypatch):
     monkeypatch.setenv("COMPILE_IQ_STORE", "/tmp/ciq_store_xyz")
     assert default_store_root() == "/tmp/ciq_store_xyz"
