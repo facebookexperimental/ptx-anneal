@@ -10,6 +10,14 @@
 #   No frontend, no collect/consume. Pure Python + ptxas + the engine: this mode is the portable one
 #   and MUST keep working in a plain git checkout with no build system.
 #
+#   MODE=native: the TRITON-NATIVE channel -- run a registered kernel through FBTRITON itself under
+#   PTXAS_OPTIONS=--apply-controls, with no PTX capture and no ptx-anneal relaunch machinery. This is
+#   the fast-verdict channel: it answers "does this kernel survive an applied ACF at all", so a
+#   failure implicates CompileIQ rather than magnon. The frontend must be fbtriton (PTXAS_OPTIONS is
+#   its knob; upstream triton would ignore the ACF and score the untuned kernel, so the scorer
+#   verifies it). Needs torch+fbtriton+the engine; without them it reports itself unavailable and the
+#   other modes still work. See triton_native/README.md.
+#
 #   MODE=full: the whole 3-step flow -- collect -> factory -> consume -- on a registered kernel.
 #   This needs a *frontend*: a triton built with the magnon collector/consumer. Building one is
 #   site-specific (in fbcode it is a buck target), so the entire frontend half lives in the optional
@@ -24,6 +32,7 @@
 #
 # Usage:   e2e.sh                              # MODE=tune on ../sample_tasks/sample_task
 #          TASK=../sample_tasks/<name> e2e.sh  # a different captured task
+#          MODE=native e2e.sh [kernel ...]     # triton-native channel (canary first; needs torch+triton)
 #          MODE=full e2e.sh [kernel ...]       # 3-step collect->factory->consume (needs the hook)
 # Env [default]: GPU[0] BENCH[cudagraph] FORCE_ADMIT[1] PTXAS[discovered] SS[engine fetches it]
 #   PYTHON[python3] TASK STORE   (the hook may add its own; see fb/e2e_internal.sh)
@@ -109,6 +118,23 @@ if [[ "$MODE" == "tune" ]]; then
   echo "e2e: FAIL(tune) - FACTORY-only: no ACF admitted (all candidates invalid)"; exit 1
 fi
 
+# --- MODE=native: the triton-native channel -------------------------------------------------------
+# A thin passthrough to the runway, which does its own availability probe (torch / triton / engine /
+# ptxas) and degrades with a reason rather than failing to load. Everything is a flag there, so this
+# adds no knobs of its own -- extra args go straight through (`MODE=native ./e2e.sh --kernel X`).
+if [[ "$MODE" == "native" ]]; then
+  args=()
+  for k in "$@"; do
+    # Bare kernel names are accepted for symmetry with MODE=full; anything starting with '-' is
+    # passed to the runway untouched.
+    if [[ "$k" == -* ]]; then args+=("$k"); else args+=(--kernel "$k"); fi
+  done
+  echo "== [native] TRITON-NATIVE channel -- PTXAS_OPTIONS=--apply-controls through triton itself =="
+  CUDA_VISIBLE_DEVICES="$GPU" PYTHONPATH="$HARNESS_PYTHONPATH" \
+    "$HARNESS_PY" -m e2e.triton_native.runway "${args[@]}"
+  exit $?
+fi
+
 # --- MODE=full: provided by the site hook ---------------------------------------------------------
 # The frontend (a triton with the magnon collector/consumer) is built site-specifically, so run_full
 # lives in fb/e2e_internal.sh. TODO: offer a build-system-agnostic frontend so internal users working
@@ -121,4 +147,4 @@ if [[ "$MODE" == "full" ]]; then
   exit 2
 fi
 
-echo "e2e: unknown MODE=$MODE (want tune|full)" >&2; exit 2
+echo "e2e: unknown MODE=$MODE (want tune|native|full)" >&2; exit 2

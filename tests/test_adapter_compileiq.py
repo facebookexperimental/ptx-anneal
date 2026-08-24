@@ -125,6 +125,53 @@ def test_engine_info_identifies_the_engine(fake_compileiq):
     assert info["version"]  # "unknown" when metadata is unavailable, never missing
 
 
+def test_task_timeout_and_clock_are_off_by_default(fake_compileiq, monkeypatch):
+    """The doc-conformance knobs must not change the shipped torch-free path unless asked for.
+
+    Unset means *absent*, not zero: ``start()`` keeps the engine's own default, and the GPU clocks
+    are not touched at all (``gpu_benchmark_mode(None)`` would warn, or raise).
+    """
+    mod = _load_adapter()
+    for var in ("CIQ_TASK_TIMEOUT", "CIQ_CLOCK_MHZ"):
+        monkeypatch.delenv(var, raising=False)
+    assert mod._env_num("CIQ_TASK_TIMEOUT", float) is None
+    assert mod._env_num("CIQ_CLOCK_MHZ", int) is None
+    # nullcontext, not the engine's clock manager -- and reached without importing compileiq.utils.
+    with mod._benchmark_mode(None):
+        pass
+
+
+def test_task_timeout_and_clock_are_read_when_set(fake_compileiq, monkeypatch):
+    mod = _load_adapter()
+    monkeypatch.setenv("CIQ_TASK_TIMEOUT", "20")
+    monkeypatch.setenv("CIQ_CLOCK_MHZ", "1965")
+    assert mod._env_num("CIQ_TASK_TIMEOUT", float) == 20.0
+    assert mod._env_num("CIQ_CLOCK_MHZ", int) == 1965
+
+
+def test_clock_lock_uses_the_engines_context_manager(fake_compileiq, monkeypatch):
+    """When a clock IS requested we must use the engine's own gpu_benchmark_mode, non-fatally: a box
+    that cannot lock clocks should still produce a (noisier) result, and the fingerprint records the
+    clock state that actually applied."""
+    seen = {}
+    gpu = types.ModuleType("compileiq.utils.gpu")
+
+    def gpu_benchmark_mode(**kw):
+        seen.update(kw)
+        return __import__("contextlib").nullcontext()
+
+    gpu.gpu_benchmark_mode = gpu_benchmark_mode
+    utils = types.ModuleType("compileiq.utils")
+    utils.gpu = gpu
+    sys.modules["compileiq"].utils = utils
+    monkeypatch.setitem(sys.modules, "compileiq.utils", utils)
+    monkeypatch.setitem(sys.modules, "compileiq.utils.gpu", gpu)
+
+    with _load_adapter()._benchmark_mode(1965):
+        pass
+    assert seen["clock_mhz"] == 1965 and seen["raise_on_failure"] is False
+
+
 def test_adapter_never_imports_ptx_anneal():
     """The engine-free boundary: the adapter must be runnable in an interpreter without ptx_anneal."""
     src = importlib.util.find_spec(ADAPTER).origin

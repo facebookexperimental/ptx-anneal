@@ -36,12 +36,69 @@ import subprocess
 import sys
 import tempfile
 
+from . import fingerprint as fp_mod
 from . import provision
 from . import task as task_mod
 from .store import LocalStore, default_store_root
 from .target import load_target
 
 INVALID = float("inf")
+
+# How each --bench choice actually reduces its samples. Recorded in the fingerprint because "we both
+# used do_bench" is not agreement if one took a median of L2-cold single launches and the other the
+# mean of a back-to-back graph replay -- those are different questions about the same kernel.
+_BENCH_RETURN_MODE = {"cudagraph": "mean(graph-replay)", "do_bench": "median(L2-cold)"}
+
+
+def _fingerprint(args, t, ptxas: str, ver: str | None, res: dict) -> dict:
+    """The search problem this run actually posed (see :mod:`ptx_anneal.fingerprint`).
+
+    Built AFTER the engine returns, never before: the search space resolves to ``latest`` by default,
+    so only the post-run metadata says which catalog was really used -- and the requested one is
+    exactly the thing that must not be recorded in its place.
+    """
+    spec = t.spec
+    tensors = spec.get("tensors") or []
+    return fp_mod.build(
+        channel="ptx-direct",
+        kernel={
+            "name": spec.get("kernel_name") or spec.get("entry"),
+            "entry": spec.get("entry"),
+            "arch": spec.get("arch"),
+            "shapes": [tt.get("shape") for tt in tensors],
+            "dtypes": [tt.get("dtype") for tt in tensors],
+            # A task is a frozen PTX, so "the pinned config" is the launch geometry baked into it --
+            # there is no autotuner left to be ambiguous about.
+            "pinned_config": {"grid": spec.get("grid"), "block": spec.get("block"), "shared": spec.get("shared")},
+            "ir_hash": t.ir_hash,
+        },
+        # No frontend at tune time: this channel replays a frozen kernel.ptx, so whichever Triton
+        # produced it did its work at COLLECT time and is not an input here. Recorded as empty rather
+        # than omitted, so a diff against the triton-native channel shows the difference explicitly.
+        frontend={},
+        ptxas={"path": ptxas, "version": ver, "flags": fp_mod.ptxas_flags()},
+        search_space=res.get("search_space") or {},
+        engine={**(res.get("engine_info") or {}), "budget": res.get("budget") or {}},
+        objective={
+            "metric": "min_ms",
+            "timing": {
+                "method": args.bench,
+                "warmup": args.warmup,
+                "rep": args.rep,
+                "return_mode": _BENCH_RETURN_MODE.get(args.bench, args.bench),
+            },
+            # The PTX-direct channel has no independent reference: an ACF cannot change the math, so
+            # a candidate is checked against the NO-ACF BASELINE's own output. That is the weaker,
+            # self-referential oracle -- named as such here so a diff against a channel using a real
+            # reference shows the difference instead of hiding it.
+            "correctness": {
+                "oracle": "baseline-output (self-referential)",
+                "strength": "weaker",
+                "validator": os.environ.get("PTX_ANNEAL_VALIDATOR") or "RelTolValidator",
+                "rel_tol": float(os.environ.get("PTX_ANNEAL_REL_TOL", "1e-2")),
+            },
+        },
+    )
 
 
 def _resolve_ptxas(args) -> str | None:
@@ -154,6 +211,9 @@ def _cmd_tune(args) -> int:
 
     evaluated = int(res.get("evaluated") or 0)
     valid = res.get("valid")
+    # Surfaced, not logged: timed-out candidates are search scope that was dropped.
+    timed_out = int(res.get("timeout") or 0)
+    timeout_tag = f" timeout={timed_out}" if timed_out else ""
     best_ms = res.get("best_ms")
     acf_hex = res.get("acf")
     engine_name = os.path.basename(adapter).removesuffix(".py").removesuffix("_adapter")
@@ -205,7 +265,7 @@ def _cmd_tune(args) -> int:
         print(
             f"admitted ACF for {target.name}/{arch}/{ir_hash[:16]} "
             f"(baseline={baseline_ms:.4f}ms best={best_ms:.4f}ms search-win={win * 100:+.2f}%){forced_tag} "
-            f"engine={engine_name} evaluated={evaluated} valid={valid} -> {store_path}"
+            f"engine={engine_name} evaluated={evaluated} valid={valid}{timeout_tag} -> {store_path}"
         )
         print("note: the search-time win is noisy; the trustworthy decision is the consumer's A/B vs baseline.")
     else:
@@ -216,7 +276,14 @@ def _cmd_tune(args) -> int:
             if not best_finite
             else "no candidate beat the baseline (set PTX_ANNEAL_FORCE_ADMIT=1 to admit best anyway)"
         )
-        print(f"no candidate admitted ({reason}); engine={engine_name} evaluated={evaluated} valid={valid}")
+        print(
+            f"no candidate admitted ({reason}); engine={engine_name} evaluated={evaluated} valid={valid}{timeout_tag}"
+        )
+
+    # Always, including on a no-admission run: the fingerprint describes the *problem*, and a
+    # channel that found nothing is exactly when you need to know whether it was even asked the same
+    # question as the channel that did.
+    print(fp_mod.render(_fingerprint(args, t, ptxas, ver, res)))
     return 0
 
 

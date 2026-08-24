@@ -73,8 +73,17 @@ PTX in, ACF out
 - `ptx_anneal/provision.py` / `cli.py` — toolchain detection (`ptx-anneal doctor`)
   and the CLI. Tuning is the *default* action (`--task`); `doctor` and the internal
   `_score` are the only subcommands — there is no `tune` subcommand.
+- `ptx_anneal/fingerprint.py` — the search-problem fingerprint both channels emit (stdlib only).
 - `e2e/` — the adhoc validation harness (`e2e.sh`, `kernels/`); never packaged.
   `MODE=tune` needs only the factory's deps; `kernels/` + `run.py` need torch+triton.
+- `e2e/triton_native/` — the optional **triton-native channel** (`MODE=native`): scores a registered
+  kernel through **fbtriton** under `PTXAS_OPTIONS=--apply-controls`, instead of relaunching captured
+  PTX. The frontend is fbtriton specifically — `PTXAS_OPTIONS` is its knob (upstream Triton has none),
+  and on the wrong Triton the ACF is ignored while every candidate still scores, so the scorer
+  *verifies* `CUDAOptions.ptx_options` before measuring. `runway.py` is pure stdlib and *probes* for
+  torch/fbtriton/engine so it degrades cleanly; `score.py` is the only module that imports them, and
+  only after the ACF env is set — `PTXAS_OPTIONS` is read when the nvidia backend is imported, so it
+  is necessarily one candidate per process. Attribution, not speed: see `e2e/triton_native/README.md`.
 - `fb/` — site scaffolding, ShipIt-stripped. Today: `e2e_internal.sh`, the buck-driven
   `MODE=full` frontend. Optional by construction. **`fb/` lives in fbsource only** — it
   must not exist in a git checkout at all, even locally and even though `.gitignore`

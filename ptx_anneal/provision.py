@@ -86,7 +86,11 @@ def find_ptxas() -> str | None:
     return candidates[0] if candidates else None
 
 
-def ptxas_version(path: str) -> str | None:
+def ptxas_version(path: str | None) -> str | None:
+    # A None path is "no ptxas was found", which is a reportable state like any other bad path --
+    # not a TypeError from deep inside subprocess. Callers already handle a None return.
+    if not path:
+        return None
     try:
         out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20, check=False).stdout
     except (OSError, subprocess.SubprocessError):

@@ -23,7 +23,7 @@ import argparse
 
 import torch
 
-from .registry import KERNELS
+from .registry import KERNELS, WEAKER_VERDICT
 
 
 def _rel_err(out: torch.Tensor, ref: torch.Tensor) -> float:
@@ -46,6 +46,16 @@ def main() -> None:
 
     out = spec.run_fn(*inputs)
     torch.cuda.synchronize()
+
+    # ref_fn=None: this harness has no baseline to fall back on (collect/consume already changed the
+    # compile), so it checks only that the kernel ran, and says so. Silently printing OK would make a
+    # smoke with no correctness check indistinguishable from one with a real reference.
+    if spec.ref_fn is None:
+        for _ in range(args.iters):
+            spec.run_fn(*inputs)
+        torch.cuda.synchronize()
+        print(f"[smoke] OK(ran, unchecked) kernel={args.kernel} mode={args.mode} -- {WEAKER_VERDICT}")
+        return
 
     ref = spec.ref_fn(*inputs)
     rel = _rel_err(out, ref)
