@@ -26,6 +26,13 @@ from triton.language.extra.tlx.tutorials.blackwell_gemm_ws import (
 
 from ..registry import KernelSpec, register
 
+# The autotuner on matmul_kernel_tma_ws_blackwell lists ~1.2M configs, and NONE of them is used
+# here: matmul(a, b, config=...) launches `matmul_kernel_tma_ws_blackwell.fn[grid](...)`, i.e. the
+# underlying JITFunction, so the autotuner is never consulted. Declared explicitly (and recorded in
+# the fingerprint) because the runway otherwise -- correctly -- refuses any kernel with a live
+# autotuner reachable from run_fn.
+AUTOTUNE_BYPASSED = "matmul(config=...) launches matmul_kernel_tma_ws_blackwell.fn[grid] directly"
+
 # Proven collecting/consuming shape (row-major A, row-major B, 16B-aligned TMA).
 _M, _N, _K = 1024, 12800, 1152
 _NUM_SMS = 148  # B200

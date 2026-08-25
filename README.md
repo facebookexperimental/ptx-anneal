@@ -45,6 +45,46 @@ Step 3. ACF consumption: On an ACF-store hit, re-assemble the kernel with the AC
 TRITON_COMPILE_IQ_APPLY=1 COMPILE_IQ_STORE=$STORE python your_workload.py
 ```
 
+## An optional second channel: triton-native
+
+Alongside the shipped PTX-direct path above, the repo carries an **optional, on-demand** runway that
+scores the *same* kernel a different way: it sets `PTXAS_OPTIONS=--apply-controls=<acf>` and lets
+[fbtriton](https://github.com/facebookexperimental/triton) compile and launch the kernel normally —
+no PTX capture, no launch spec. (`PTXAS_OPTIONS` is fbtriton's knob; the runway checks for fbtriton
+and verifies per candidate that the ACF actually reached the compiler, since a Triton without that
+knob would compile untuned and still report a score.)
+
+```bash
+python -m e2e.triton_native.runway               # the canary
+python -m e2e.triton_native.runway --kernel k    # canary, then your kernel
+```
+
+It exists to make results **attributable**. The two channels share an engine, an adapter and a
+scoring contract, and differ only in how a candidate is executed — so comparing them separates a
+question about the compiler from a question about our harness:
+
+| triton-native | PTX-direct | conclusion |
+|---|---|---|
+| fail | — | the finding is in the compiler/engine path, reproducible with no `ptx-anneal` code |
+| pass | fail | the finding is in `ptx-anneal` — the captured repro or the consume path |
+| pass | pass, numbers disagree | also `ptx-anneal`, and the easiest kind to miss: both look green |
+| pass | pass, numbers agree | trustworthy |
+
+That comparison only means something if both channels posed the **same search problem**, so both
+print a **search-problem fingerprint** at the end of a run — kernel identity, ptxas path/version/flags,
+the *resolved* search space, the frontend that compiled it, engine and budget, the objective (metric,
+timing method and budget, correctness oracle and tolerance) and the environment (GPU, CUDA, driver,
+clock state), plus a digest
+over all of it. Equal digests mean the two runs are comparable; `diff` shows exactly what moved when
+they are not. The fingerprint is also what makes a result shareable: it is a complete, self-contained
+statement of what was measured and under what conditions.
+
+The channel is **off by default and not in the wheel or sdist** — it needs torch and fbtriton, and
+without them it reports itself unavailable and nothing else changes. Defaults follow NVIDIA's
+documented CompileIQ example wherever that is practical, and the deviations that remain are recorded
+in the fingerprint rather than left implicit. See
+[`e2e/triton_native/README.md`](e2e/triton_native/README.md).
+
 ## How the CLI runs a search
 
 `ptx_anneal --task ...` is local and single-host: it scores the untuned baseline in-process,
@@ -91,6 +131,10 @@ pip3 install ptx-anneal[compileiq]   # harness + the reference search engine
 Extras: `compileiq` (the reference engine), `cudapy` (torch-free scorer), `harness` (PTX-direct
 benchmarking; needs torch+triton), `dev` (pytest + ruff). Plain `pip3 install ptx-anneal` gets the
 store/ABC/`doctor` layer only — pure Python, no GPU, no engine.
+
+The wheel contains the `ptx_anneal` package and nothing else. The validation harnesses (`e2e/`,
+including the triton-native channel) are development tools and are excluded from both the wheel and
+the sdist, so installing `ptx-anneal` never pulls in torch or triton.
 
 ## Requirements
 
