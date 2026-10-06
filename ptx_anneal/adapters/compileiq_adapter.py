@@ -12,6 +12,9 @@ Contract (all via env, set by the harness):
     PTX_ANNEAL_TASK        task dir (kernel.ptx + spec.json)
     PTX_ANNEAL_PTXAS       ptxas to assemble/apply ACFs with
     PTX_ANNEAL_SS          search-space .bin (OPTIONAL -- unset means "fetch the published catalog")
+    PTX_ANNEAL_SS_FETCH_CMD   command template that downloads the search space to {dest}, used when
+                              PTX_ANNEAL_SS is unset and its program is on PATH (optional);
+                              {ptxas_version} is read from `$PTX_ANNEAL_PTXAS --version`
     PTX_ANNEAL_RESULT      path to write the result JSON to
     PTX_ANNEAL_WARMUP / PTX_ANNEAL_REP   benchmark iters (optional)
     CIQ_GENERATIONS / CIQ_POOL           engine budget (optional)
@@ -39,9 +42,14 @@ tuning that the harness cannot see (it never imports the engine, and the engine 
 interpreter), so an unexplained result is otherwise hard to attribute.
 """
 
+import atexit
 import contextlib
+import hashlib
 import json
 import os
+import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -98,14 +106,80 @@ def _engine_info() -> dict:
     return {"name": "compileiq", "version": version, "path": path, "python": sys.executable}
 
 
-def _resolve_search_space(ss: str):
+def _ptxas_version(ptxas: str) -> str:
+    """``ptxas --version`` as "13.3", or "" if it cannot be run or parsed.
+
+    Asked of the ptxas itself rather than passed in: it is the binary that will assemble every
+    candidate, so its own answer is the one the search space must match. Mirrors
+    ``provision.ptxas_version``, which this standalone script cannot import.
+    """
+    if not ptxas:
+        return ""
+    try:
+        out = subprocess.run([ptxas, "--version"], capture_output=True, text=True, timeout=20, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    m = re.search(r"release\s+([0-9]+\.[0-9]+)", out) or re.search(r"V([0-9]+\.[0-9]+)\.[0-9]+", out)
+    return m.group(1) if m else ""
+
+
+def _fetch_search_space(template: str, ptxas_version: str):
+    """Download the search space with a site-supplied command; ``None`` if its program is absent.
+
+    The template is a command line with ``{ptxas_version}`` and ``{dest}`` placeholders, e.g. a
+    site's blob-store CLI pointed at its own copy of the catalog. It is a hook, not a source this
+    adapter knows about: the site's storage stays out of the shared tree, and the adapter keeps
+    working unchanged wherever that program is not installed -- absent means "fall through to the
+    published catalog", not an error.
+
+    Once the program IS present the hook is a pin, and a failed fetch is fatal rather than a quiet
+    fallback: substituting a different catalog would hand back an ACF tuned from a search space
+    nobody asked for.
+    """
+    if "{dest}" not in template:
+        raise SystemExit(f"compileiq_adapter: PTX_ANNEAL_SS_FETCH_CMD has no {{dest}} placeholder: {template!r}")
+    if "{ptxas_version}" in template and not ptxas_version:
+        raise SystemExit(
+            "compileiq_adapter: PTX_ANNEAL_SS_FETCH_CMD needs {ptxas_version}, but `ptxas --version` "
+            "gave none (check PTX_ANNEAL_PTXAS)"
+        )
+    argv = shlex.split(template)
+    if not shutil.which(argv[0]):
+        print(f"search space: fetch hook skipped ({argv[0]!r} not on PATH)", file=sys.stderr, flush=True)
+        return None
+
+    tmpdir = tempfile.mkdtemp(prefix="ptx_anneal_ss_")
+    # The engine may read the .bin lazily, mid-search, so it must outlive this call -- not the process.
+    atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
+    dest = os.path.join(tmpdir, "search_space.bin")
+    argv = [a.replace("{ptxas_version}", ptxas_version).replace("{dest}", dest) for a in argv]
+    out = subprocess.run(argv, capture_output=True, text=True, check=False)
+    if out.returncode != 0 or not os.path.isfile(dest):
+        raise SystemExit(
+            f"compileiq_adapter: search-space fetch failed (exit {out.returncode}): {shlex.join(argv)}\n"
+            f"{out.stderr.strip()}"
+        )
+    with open(dest, "rb") as f:
+        sha256 = hashlib.sha256(f.read()).hexdigest()
+    # The command (not the temp path) is what identifies the catalog, so that is what the sidecar keeps.
+    return dest, {
+        "source": "PTX_ANNEAL_SS_FETCH_CMD",
+        "command": template.replace("{ptxas_version}", ptxas_version),
+        "compiler_version": ptxas_version,
+        "sha256": sha256,
+        "path": dest,
+    }
+
+
+def _resolve_search_space(ss: str, ptxas_version: str = ""):
     """Return ``(provider, provenance)`` for the engine's search space.
 
     An explicit ``PTX_ANNEAL_SS`` always wins -- it is how you pin a dev build or an out-of-band
-    asset. With none given, CompileIQ resolves its published catalog for (version, variant, tag) and
-    caches the artifact under ``~/.cache/compileiq/<tag>/``, so a plain checkout needs neither a
-    CompileIQ clone nor ``--ss``. ``CIQ_SEARCH_SPACES_DIR`` redirects that lookup at an offline
-    mirror without changing anything here.
+    asset. Next, a site may supply ``PTX_ANNEAL_SS_FETCH_CMD`` to download the search space for this
+    ``ptxas_version`` from its own storage (see ``_fetch_search_space``). With neither, CompileIQ
+    resolves its published catalog for (version, variant, tag) and caches the artifact under
+    ``~/.cache/compileiq/<tag>/``, so a plain checkout needs neither a CompileIQ clone nor ``--ss``.
+    ``CIQ_SEARCH_SPACES_DIR`` redirects that lookup at an offline mirror without changing anything here.
 
     The provenance dict is handed back to the harness and lands in the ACF's sidecar. That matters
     precisely because the default tag is "latest": the search space is an *input* to tuning, so
@@ -118,6 +192,12 @@ def _resolve_search_space(ss: str):
         if not os.path.exists(ss):
             raise SystemExit(f"compileiq_adapter: search space not found: {ss!r} (set --ss / PTX_ANNEAL_SS)")
         return LocalSearchSpaceBin(ss), {"source": "PTX_ANNEAL_SS", "path": os.path.abspath(ss)}
+
+    fetch_cmd = os.environ.get("PTX_ANNEAL_SS_FETCH_CMD", "").strip()
+    fetched = _fetch_search_space(fetch_cmd, ptxas_version) if fetch_cmd else None
+    if fetched:
+        path, meta = fetched
+        return LocalSearchSpaceBin(path), meta
 
     # Forward version/variant/tag only when set, so the catalog's own default stays the single
     # source of truth instead of being duplicated (and left to rot) here.
@@ -164,7 +244,7 @@ def main() -> int:
         flush=True,
     )
 
-    search_space, ss_meta = _resolve_search_space(ss)
+    search_space, ss_meta = _resolve_search_space(ss, _ptxas_version(ptxas))
     src = ss_meta.get("source", "?")
     tag = ss_meta.get("resolved_tag")
     print(

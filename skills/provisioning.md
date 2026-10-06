@@ -17,7 +17,9 @@ can't find an optimization engine. Goal: get a working tuning toolchain.
 3. **A search space** — the engine's own concern, not ptx-anneal's. CompileIQ
    fetches its published catalog and caches it under `~/.cache/compileiq/<tag>/`,
    so there is normally nothing to provision. Override with `--ss` (an explicit
-   `.bin`) or `CIQ_SEARCH_SPACES_DIR` (offline mirror with `manifest.json`).
+   `.bin`), `PTX_ANNEAL_SS_FETCH_CMD` (a command that downloads the `.bin` for
+   `{ptxas_version}` to `{dest}`; skipped when its program is not on `PATH`) or
+   `CIQ_SEARCH_SPACES_DIR` (offline mirror with `manifest.json`).
 4. **A frontend** that emits tuning tasks and can apply an artifact (e.g.
    fbtriton via `TRITON_COMPILE_IQ_COLLECT` / `TRITON_COMPILE_IQ_APPLY`).
 

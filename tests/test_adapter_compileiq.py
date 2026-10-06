@@ -8,7 +8,9 @@ what lets these tests run anywhere -- we inject a stub ``compileiq`` into ``sys.
 never needs the real engine (which is >=3.11,<3.14 + glibc 2.34) to cover this logic.
 """
 
+import hashlib
 import importlib.util
+import os
 import sys
 import types
 
@@ -114,6 +116,76 @@ def test_ciq_ss_env_is_forwarded_as_a_selector(fake_compileiq, monkeypatch):
     monkeypatch.delenv("CIQ_SS_VERSION", raising=False)
     _load_adapter()._resolve_search_space("")
     assert fake_compileiq["selector"] == {"variant": "att", "tag": "search-spaces-2026.05.22"}
+
+
+@pytest.fixture
+def fetch_tool(tmp_path, monkeypatch):
+    """A stub `fetchss SRC DEST` on PATH that copies SRC to DEST -- stands in for a site's blob-store CLI."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    tool = bindir / "fetchss"
+    tool.write_text('#!/bin/sh\n[ -f "$1" ] || { echo "no such object: $1" >&2; exit 3; }\ncp "$1" "$2"\n')
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    (remote / "ptxas13.3_search_space.bin").write_bytes(b"ss-13.3")
+    return remote
+
+
+def _fetch_template(remote):
+    return f"fetchss {remote}/ptxas{{ptxas_version}}_search_space.bin {{dest}}"
+
+
+def test_fetch_cmd_downloads_the_search_space_for_this_ptxas(fake_compileiq, fetch_tool, monkeypatch):
+    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", _fetch_template(fetch_tool))
+    provider, meta = _load_adapter()._resolve_search_space("", "13.3")
+    with open(provider.path, "rb") as f:
+        assert f.read() == b"ss-13.3"
+    assert meta["source"] == "PTX_ANNEAL_SS_FETCH_CMD"
+    # The sidecar records which object was fetched (not the temp path) and what it hashed to.
+    assert meta["command"] == f"fetchss {fetch_tool}/ptxas13.3_search_space.bin {{dest}}"
+    assert meta["sha256"] == hashlib.sha256(b"ss-13.3").hexdigest()
+    assert "selector" not in fake_compileiq  # the catalog was never consulted
+
+
+def test_fetch_cmd_is_skipped_when_its_program_is_not_on_path(fake_compileiq, monkeypatch):
+    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", "no-such-fetch-tool-xyz {ptxas_version} {dest}")
+    _, meta = _load_adapter()._resolve_search_space("", "13.3")
+    assert fake_compileiq["retrieved"] is True  # fell through to the published catalog
+    assert meta["resolved_tag"] == "search-spaces-2026.05.22"
+
+
+def test_failed_fetch_is_fatal_not_a_silent_catalog_fallback(fake_compileiq, fetch_tool, monkeypatch):
+    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", _fetch_template(fetch_tool))
+    with pytest.raises(SystemExit, match="search-space fetch failed"):
+        _load_adapter()._resolve_search_space("", "13.4")
+    assert "selector" not in fake_compileiq
+
+
+def test_explicit_ss_beats_the_fetch_cmd(fake_compileiq, fetch_tool, tmp_path, monkeypatch):
+    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", _fetch_template(fetch_tool))
+    ss = tmp_path / "my.bin"
+    ss.write_bytes(b"\x00")
+    _, meta = _load_adapter()._resolve_search_space(str(ss), "13.3")
+    assert meta["source"] == "PTX_ANNEAL_SS"
+
+
+def test_ptxas_version_is_asked_of_the_ptxas_itself(tmp_path):
+    ptxas = tmp_path / "ptxas"
+    ptxas.write_text('#!/bin/sh\necho "Cuda compilation tools, release 13.3, V13.3.42"\n')
+    ptxas.chmod(0o755)
+    adapter = _load_adapter()
+    assert adapter._ptxas_version(str(ptxas)) == "13.3"
+    # Unrunnable or unset is "unknown", not a crash -- the fetch hook then fails with a clear message.
+    assert adapter._ptxas_version(str(tmp_path / "missing")) == ""
+    assert adapter._ptxas_version("") == ""
+
+
+def test_fetch_cmd_without_dest_fails_loudly(fake_compileiq, monkeypatch):
+    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", "fetchss somewhere")
+    with pytest.raises(SystemExit, match="no {dest} placeholder"):
+        _load_adapter()._resolve_search_space("", "13.3")
 
 
 def test_engine_info_identifies_the_engine(fake_compileiq):

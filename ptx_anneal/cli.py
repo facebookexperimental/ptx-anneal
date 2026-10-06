@@ -304,6 +304,8 @@ knobs with no flag (environment only):
   CIQ_POOL / CIQ_GENERATIONS         engine budget (default 8 / 1 -- one batch, no evolution)
   CIQ_SS_TAG / CIQ_SS_VERSION / CIQ_SS_VARIANT   pin the published search-space catalog
   CIQ_SEARCH_SPACES_DIR    offline search-space mirror (no network)
+  PTX_ANNEAL_SS_FETCH_CMD  command that downloads the search space to {dest} ({ptxas_version} is
+                           substituted); used when --ss is unset and its program is on PATH
 
 notes:
   The exit code does NOT report admission -- 0 means the run completed, not that an ACF was

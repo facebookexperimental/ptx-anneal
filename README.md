@@ -32,7 +32,7 @@ isn't what you want:
 | Piece | Default | Pin with |
 |-------|---------|----------|
 | Search engine | `pip install ptx-anneal[compileiq]`, in the same env as `ptx_anneal` | `--engine-python` / `--engine-adapter` |
-| Search space | the engine fetches its published catalog (`latest`) and caches it under `~/.cache/compileiq/<tag>/` | `--ss <bin>`, or `CIQ_SS_TAG` / `CIQ_SS_VERSION` / `CIQ_SS_VARIANT`, or `CIQ_SEARCH_SPACES_DIR` for an offline mirror |
+| Search space | the engine fetches its published catalog (`latest`) and caches it under `~/.cache/compileiq/<tag>/` | `--ss <bin>`, or `CIQ_SS_TAG` / `CIQ_SS_VERSION` / `CIQ_SS_VARIANT`, or `CIQ_SEARCH_SPACES_DIR` for an offline mirror, or `PTX_ANNEAL_SS_FETCH_CMD` to download it from your own storage (`{ptxas_version}` / `{dest}` are substituted; skipped when the program is not on `PATH`) |
 | `ptxas` (>= 13.3) | `$PTXAS` / `$TRITON_PTXAS_BLACKWELL_PATH`, else `PATH`, else a pip-installed `nvidia-cuda-nvcc` wheel | `--ptxas` |
 
 Because the search space is a tuning *input* and resolves to `latest` by default, every admitted ACF
