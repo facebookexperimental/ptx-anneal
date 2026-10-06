@@ -10,7 +10,7 @@ never needs the real engine (which is >=3.11,<3.14 + glibc 2.34) to cover this l
 
 import hashlib
 import importlib.util
-import os
+import shutil
 import sys
 import types
 
@@ -118,53 +118,58 @@ def test_ciq_ss_env_is_forwarded_as_a_selector(fake_compileiq, monkeypatch):
     assert fake_compileiq["selector"] == {"variant": "att", "tag": "search-spaces-2026.05.22"}
 
 
+@pytest.fixture(autouse=True)
+def no_manifold(monkeypatch):
+    """Hide any real `manifold` on PATH: a devserver has one, CI does not, and tests must not care."""
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda cmd, *a, **kw: None if cmd == "manifold" else real_which(cmd, *a, **kw))
+
+
 @pytest.fixture
-def fetch_tool(tmp_path, monkeypatch):
-    """A stub `fetchss SRC DEST` on PATH that copies SRC to DEST -- stands in for a site's blob-store CLI."""
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    tool = bindir / "fetchss"
-    tool.write_text('#!/bin/sh\n[ -f "$1" ] || { echo "no such object: $1" >&2; exit 3; }\ncp "$1" "$2"\n')
-    tool.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+def fake_manifold(tmp_path, monkeypatch):
+    """A stub `manifold get <bucket>/<path> <dest>` serving objects from a local dir; returns that dir."""
     remote = tmp_path / "remote"
-    remote.mkdir()
-    (remote / "ptxas13.3_search_space.bin").write_bytes(b"ss-13.3")
+    (remote / "compileiq" / "ptxas_knobs").mkdir(parents=True)
+    (remote / "compileiq" / "ptxas_knobs" / "ptxas13.3_search_space.bin").write_bytes(b"ss-13.3")
+    tool = tmp_path / "manifold"
+    tool.write_text(
+        f'#!/bin/sh\n[ "$1" = get ] || exit 2\n'
+        f'[ -f "{remote}/$2" ] || {{ echo "no such object: $2" >&2; exit 3; }}\ncp "{remote}/$2" "$3"\n'
+    )
+    tool.chmod(0o755)
+    monkeypatch.setattr(shutil, "which", lambda cmd, *a, **kw: str(tool) if cmd == "manifold" else None)
     return remote
 
 
-def _fetch_template(remote):
-    return f"fetchss {remote}/ptxas{{ptxas_version}}_search_space.bin {{dest}}"
-
-
-def test_fetch_cmd_downloads_the_search_space_for_this_ptxas(fake_compileiq, fetch_tool, monkeypatch):
-    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", _fetch_template(fetch_tool))
+def test_manifold_downloads_the_search_space_for_this_ptxas(fake_compileiq, fake_manifold):
     provider, meta = _load_adapter()._resolve_search_space("", "13.3")
     with open(provider.path, "rb") as f:
         assert f.read() == b"ss-13.3"
-    assert meta["source"] == "PTX_ANNEAL_SS_FETCH_CMD"
-    # The sidecar records which object was fetched (not the temp path) and what it hashed to.
-    assert meta["command"] == f"fetchss {fetch_tool}/ptxas13.3_search_space.bin {{dest}}"
+    # The sidecar records which object was downloaded (not the temp path) and what it hashed to.
+    assert meta["source"] == "manifold"
+    assert meta["url"] == "manifold://compileiq/ptxas_knobs/ptxas13.3_search_space.bin"
     assert meta["sha256"] == hashlib.sha256(b"ss-13.3").hexdigest()
     assert "selector" not in fake_compileiq  # the catalog was never consulted
 
 
-def test_fetch_cmd_is_skipped_when_its_program_is_not_on_path(fake_compileiq, monkeypatch):
-    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", "no-such-fetch-tool-xyz {ptxas_version} {dest}")
+def test_without_manifold_the_catalog_is_used(fake_compileiq):
     _, meta = _load_adapter()._resolve_search_space("", "13.3")
-    assert fake_compileiq["retrieved"] is True  # fell through to the published catalog
+    assert fake_compileiq["retrieved"] is True
     assert meta["resolved_tag"] == "search-spaces-2026.05.22"
 
 
-def test_failed_fetch_is_fatal_not_a_silent_catalog_fallback(fake_compileiq, fetch_tool, monkeypatch):
-    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", _fetch_template(fetch_tool))
-    with pytest.raises(SystemExit, match="search-space fetch failed"):
+def test_failed_manifold_download_is_fatal_not_a_silent_catalog_fallback(fake_compileiq, fake_manifold):
+    with pytest.raises(SystemExit, match="search-space download failed"):
         _load_adapter()._resolve_search_space("", "13.4")
     assert "selector" not in fake_compileiq
 
 
-def test_explicit_ss_beats_the_fetch_cmd(fake_compileiq, fetch_tool, tmp_path, monkeypatch):
-    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", _fetch_template(fetch_tool))
+def test_unknown_ptxas_version_with_manifold_fails_loudly(fake_compileiq, fake_manifold):
+    with pytest.raises(SystemExit, match="ptxas --version"):
+        _load_adapter()._resolve_search_space("", "")
+
+
+def test_explicit_ss_beats_manifold(fake_compileiq, fake_manifold, tmp_path):
     ss = tmp_path / "my.bin"
     ss.write_bytes(b"\x00")
     _, meta = _load_adapter()._resolve_search_space(str(ss), "13.3")
@@ -177,15 +182,9 @@ def test_ptxas_version_is_asked_of_the_ptxas_itself(tmp_path):
     ptxas.chmod(0o755)
     adapter = _load_adapter()
     assert adapter._ptxas_version(str(ptxas)) == "13.3"
-    # Unrunnable or unset is "unknown", not a crash -- the fetch hook then fails with a clear message.
+    # Unrunnable or unset is "unknown", not a crash -- the manifold download then fails with a clear message.
     assert adapter._ptxas_version(str(tmp_path / "missing")) == ""
     assert adapter._ptxas_version("") == ""
-
-
-def test_fetch_cmd_without_dest_fails_loudly(fake_compileiq, monkeypatch):
-    monkeypatch.setenv("PTX_ANNEAL_SS_FETCH_CMD", "fetchss somewhere")
-    with pytest.raises(SystemExit, match="no {dest} placeholder"):
-        _load_adapter()._resolve_search_space("", "13.3")
 
 
 def test_engine_info_identifies_the_engine(fake_compileiq):

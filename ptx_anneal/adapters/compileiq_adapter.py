@@ -12,9 +12,6 @@ Contract (all via env, set by the harness):
     PTX_ANNEAL_TASK        task dir (kernel.ptx + spec.json)
     PTX_ANNEAL_PTXAS       ptxas to assemble/apply ACFs with
     PTX_ANNEAL_SS          search-space .bin (OPTIONAL -- unset means "fetch the published catalog")
-    PTX_ANNEAL_SS_FETCH_CMD   command template that downloads the search space to {dest}, used when
-                              PTX_ANNEAL_SS is unset and its program is on PATH (optional);
-                              {ptxas_version} is read from `$PTX_ANNEAL_PTXAS --version`
     PTX_ANNEAL_RESULT      path to write the result JSON to
     PTX_ANNEAL_WARMUP / PTX_ANNEAL_REP   benchmark iters (optional)
     CIQ_GENERATIONS / CIQ_POOL           engine budget (optional)
@@ -123,51 +120,49 @@ def _ptxas_version(ptxas: str) -> str:
     return m.group(1) if m else ""
 
 
-def _fetch_search_space(template: str, ptxas_version: str):
-    """Download the search space with a site-supplied command; ``None`` if its program is absent.
+# Where the search space is downloaded from when `manifold` is on PATH; {ptxas_version} is the version
+# `$PTX_ANNEAL_PTXAS --version` reports, e.g. "13.3".
+_MANIFOLD_SS_URL = "manifold://compileiq/ptxas_knobs/ptxas{ptxas_version}_search_space.bin"
 
-    The template is a command line with ``{ptxas_version}`` and ``{dest}`` placeholders, e.g. a
-    site's blob-store CLI pointed at its own copy of the catalog. It is a hook, not a source this
-    adapter knows about: the site's storage stays out of the shared tree, and the adapter keeps
-    working unchanged wherever that program is not installed -- absent means "fall through to the
-    published catalog", not an error.
 
-    Once the program IS present the hook is a pin, and a failed fetch is fatal rather than a quiet
-    fallback: substituting a different catalog would hand back an ACF tuned from a search space
-    nobody asked for.
+def _fetch_search_space(ptxas_version: str):
+    """Download the search space for ``ptxas_version`` from manifold; ``None`` if ``manifold`` is absent.
+
+    Without the ``manifold`` CLI the adapter falls through to the published catalog, exactly as
+    before. With it, the download is fatal on failure rather than a quiet fallback: substituting a
+    different catalog would hand back an ACF tuned from a search space nobody asked for.
     """
-    if "{dest}" not in template:
-        raise SystemExit(f"compileiq_adapter: PTX_ANNEAL_SS_FETCH_CMD has no {{dest}} placeholder: {template!r}")
-    if "{ptxas_version}" in template and not ptxas_version:
-        raise SystemExit(
-            "compileiq_adapter: PTX_ANNEAL_SS_FETCH_CMD needs {ptxas_version}, but `ptxas --version` "
-            "gave none (check PTX_ANNEAL_PTXAS)"
-        )
-    argv = shlex.split(template)
-    if not shutil.which(argv[0]):
-        print(f"search space: fetch hook skipped ({argv[0]!r} not on PATH)", file=sys.stderr, flush=True)
+    manifold = shutil.which("manifold")
+    if not manifold:
         return None
+    if not ptxas_version:
+        raise SystemExit(
+            "compileiq_adapter: cannot pick a manifold search space -- `ptxas --version` gave no version "
+            "(check PTX_ANNEAL_PTXAS)"
+        )
+    url = _MANIFOLD_SS_URL.format(ptxas_version=ptxas_version)
 
     tmpdir = tempfile.mkdtemp(prefix="ptx_anneal_ss_")
     # The engine may read the .bin lazily, mid-search, so it must outlive this call -- not the process.
     atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
-    dest = os.path.join(tmpdir, "search_space.bin")
-    argv = [a.replace("{ptxas_version}", ptxas_version).replace("{dest}", dest) for a in argv]
+    dest = os.path.join(tmpdir, os.path.basename(url))
+    # `manifold get` takes <bucket>/<path>, without the scheme.
+    argv = [manifold, "get", url.removeprefix("manifold://"), dest]
     out = subprocess.run(argv, capture_output=True, text=True, check=False)
     if out.returncode != 0 or not os.path.isfile(dest):
         raise SystemExit(
-            f"compileiq_adapter: search-space fetch failed (exit {out.returncode}): {shlex.join(argv)}\n"
+            f"compileiq_adapter: search-space download failed (exit {out.returncode}): {shlex.join(argv)}\n"
             f"{out.stderr.strip()}"
         )
     with open(dest, "rb") as f:
         sha256 = hashlib.sha256(f.read()).hexdigest()
-    # The command (not the temp path) is what identifies the catalog, so that is what the sidecar keeps.
+    # The URL (not the temp path) is what identifies the catalog, so that is what the sidecar keeps.
     return dest, {
-        "source": "PTX_ANNEAL_SS_FETCH_CMD",
-        "command": template.replace("{ptxas_version}", ptxas_version),
+        "source": "manifold",
+        "url": url,
+        "filename": os.path.basename(url),
         "compiler_version": ptxas_version,
         "sha256": sha256,
-        "path": dest,
     }
 
 
@@ -175,8 +170,8 @@ def _resolve_search_space(ss: str, ptxas_version: str = ""):
     """Return ``(provider, provenance)`` for the engine's search space.
 
     An explicit ``PTX_ANNEAL_SS`` always wins -- it is how you pin a dev build or an out-of-band
-    asset. Next, a site may supply ``PTX_ANNEAL_SS_FETCH_CMD`` to download the search space for this
-    ``ptxas_version`` from its own storage (see ``_fetch_search_space``). With neither, CompileIQ
+    asset. Next, when the ``manifold`` CLI is on PATH, the search space for this ``ptxas_version`` is
+    downloaded from manifold (see ``_fetch_search_space``). With neither, CompileIQ
     resolves its published catalog for (version, variant, tag) and caches the artifact under
     ``~/.cache/compileiq/<tag>/``, so a plain checkout needs neither a CompileIQ clone nor ``--ss``.
     ``CIQ_SEARCH_SPACES_DIR`` redirects that lookup at an offline mirror without changing anything here.
@@ -193,8 +188,7 @@ def _resolve_search_space(ss: str, ptxas_version: str = ""):
             raise SystemExit(f"compileiq_adapter: search space not found: {ss!r} (set --ss / PTX_ANNEAL_SS)")
         return LocalSearchSpaceBin(ss), {"source": "PTX_ANNEAL_SS", "path": os.path.abspath(ss)}
 
-    fetch_cmd = os.environ.get("PTX_ANNEAL_SS_FETCH_CMD", "").strip()
-    fetched = _fetch_search_space(fetch_cmd, ptxas_version) if fetch_cmd else None
+    fetched = _fetch_search_space(ptxas_version)
     if fetched:
         path, meta = fetched
         return LocalSearchSpaceBin(path), meta

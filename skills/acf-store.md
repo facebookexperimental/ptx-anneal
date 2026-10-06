@@ -67,8 +67,8 @@ result is surprising or won't reproduce:
   same kernel can come from different catalogs, and the store key does **not**
   distinguish them — `resolved_tag`/`sha256` is the only record of which was used.
   When `--ss`/`PTX_ANNEAL_SS` pinned an explicit file, `source` is `PTX_ANNEAL_SS`
-  and only the path is recorded. When `PTX_ANNEAL_SS_FETCH_CMD` downloaded it,
-  `source` is `PTX_ANNEAL_SS_FETCH_CMD` with the `command` and `sha256`.
+  and only the path is recorded. When it was downloaded from manifold, `source`
+  is `manifold` with the `url` and `sha256`.
 - `search_win` is a noisy search-time number, not a promise; see
   `skills/factory-search.md`.
 
