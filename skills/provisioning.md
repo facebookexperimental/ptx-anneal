@@ -20,7 +20,7 @@ can't find an optimization engine. Goal: get a working tuning toolchain.
    `.bin`) or `CIQ_SEARCH_SPACES_DIR` (offline mirror with `manifest.json`).
    Without `--ss`, if the `manifold` CLI is on `PATH` the search space is instead
    downloaded from
-   `manifold://compileiq/ptxas_knobs/ptxas<ptxas_version>_search_space.bin`.
+   `manifold://tc_bench_ci/tree/compileiq/ptxas_knobs/ptxas<ptxas_version>_search_space.bin`.
 4. **A frontend** that emits tuning tasks and can apply an artifact (e.g.
    fbtriton via `TRITON_COMPILE_IQ_COLLECT` / `TRITON_COMPILE_IQ_APPLY`).
 

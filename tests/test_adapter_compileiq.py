@@ -129,8 +129,9 @@ def no_manifold(monkeypatch):
 def fake_manifold(tmp_path, monkeypatch):
     """A stub `manifold get <bucket>/<path> <dest>` serving objects from a local dir; returns that dir."""
     remote = tmp_path / "remote"
-    (remote / "compileiq" / "ptxas_knobs").mkdir(parents=True)
-    (remote / "compileiq" / "ptxas_knobs" / "ptxas13.3_search_space.bin").write_bytes(b"ss-13.3")
+    knobs = remote / "tc_bench_ci" / "tree" / "compileiq" / "ptxas_knobs"
+    knobs.mkdir(parents=True)
+    (knobs / "ptxas13.3_search_space.bin").write_bytes(b"ss-13.3")
     tool = tmp_path / "manifold"
     tool.write_text(
         f'#!/bin/sh\n[ "$1" = get ] || exit 2\n'
@@ -147,7 +148,7 @@ def test_manifold_downloads_the_search_space_for_this_ptxas(fake_compileiq, fake
         assert f.read() == b"ss-13.3"
     # The sidecar records which object was downloaded (not the temp path) and what it hashed to.
     assert meta["source"] == "manifold"
-    assert meta["url"] == "manifold://compileiq/ptxas_knobs/ptxas13.3_search_space.bin"
+    assert meta["url"] == "manifold://tc_bench_ci/tree/compileiq/ptxas_knobs/ptxas13.3_search_space.bin"
     assert meta["sha256"] == hashlib.sha256(b"ss-13.3").hexdigest()
     assert "selector" not in fake_compileiq  # the catalog was never consulted
 

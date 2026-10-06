@@ -122,7 +122,7 @@ def _ptxas_version(ptxas: str) -> str:
 
 # Where the search space is downloaded from when `manifold` is on PATH; {ptxas_version} is the version
 # `$PTX_ANNEAL_PTXAS --version` reports, e.g. "13.3".
-_MANIFOLD_SS_URL = "manifold://compileiq/ptxas_knobs/ptxas{ptxas_version}_search_space.bin"
+_MANIFOLD_SS_URL = "manifold://tc_bench_ci/tree/compileiq/ptxas_knobs/ptxas{ptxas_version}_search_space.bin"
 
 
 def _fetch_search_space(ptxas_version: str):
@@ -222,7 +222,9 @@ def main() -> int:
     warmup = os.environ.get("PTX_ANNEAL_WARMUP", "25")
     rep = os.environ.get("PTX_ANNEAL_REP", "50")
     gens = int(os.environ.get("CIQ_GENERATIONS", "1"))
-    pool = int(os.environ.get("CIQ_POOL", "8"))
+    pool = int(os.environ.get("CIQ_POOL", "0"))
+    if pool == 0:
+        pool = None
     task_timeout = _env_num("CIQ_TASK_TIMEOUT", float)
     clock_mhz = _env_num("CIQ_CLOCK_MHZ", int)
 
