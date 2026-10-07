@@ -39,9 +39,14 @@ tuning that the harness cannot see (it never imports the engine, and the engine 
 interpreter), so an unexplained result is otherwise hard to attribute.
 """
 
+import atexit
 import contextlib
+import hashlib
 import json
 import os
+import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -98,14 +103,78 @@ def _engine_info() -> dict:
     return {"name": "compileiq", "version": version, "path": path, "python": sys.executable}
 
 
-def _resolve_search_space(ss: str):
+def _ptxas_version(ptxas: str) -> str:
+    """``ptxas --version`` as "13.3", or "" if it cannot be run or parsed.
+
+    Asked of the ptxas itself rather than passed in: it is the binary that will assemble every
+    candidate, so its own answer is the one the search space must match. Mirrors
+    ``provision.ptxas_version``, which this standalone script cannot import.
+    """
+    if not ptxas:
+        return ""
+    try:
+        out = subprocess.run([ptxas, "--version"], capture_output=True, text=True, timeout=20, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    m = re.search(r"release\s+([0-9]+\.[0-9]+)", out) or re.search(r"V([0-9]+\.[0-9]+)\.[0-9]+", out)
+    return m.group(1) if m else ""
+
+
+# Where the search space is downloaded from when `manifold` is on PATH; {ptxas_version} is the version
+# `$PTX_ANNEAL_PTXAS --version` reports, e.g. "13.3".
+_MANIFOLD_SS_URL = "manifold://tc_bench_ci/tree/compileiq/ptxas_knobs/ptxas{ptxas_version}_search_space.bin"
+
+
+def _fetch_search_space(ptxas_version: str):
+    """Download the search space for ``ptxas_version`` from manifold; ``None`` if ``manifold`` is absent.
+
+    Without the ``manifold`` CLI the adapter falls through to the published catalog, exactly as
+    before. With it, the download is fatal on failure rather than a quiet fallback: substituting a
+    different catalog would hand back an ACF tuned from a search space nobody asked for.
+    """
+    manifold = shutil.which("manifold")
+    if not manifold:
+        return None
+    if not ptxas_version:
+        raise SystemExit(
+            "compileiq_adapter: cannot pick a manifold search space -- `ptxas --version` gave no version "
+            "(check PTX_ANNEAL_PTXAS)"
+        )
+    url = _MANIFOLD_SS_URL.format(ptxas_version=ptxas_version)
+
+    tmpdir = tempfile.mkdtemp(prefix="ptx_anneal_ss_")
+    # The engine may read the .bin lazily, mid-search, so it must outlive this call -- not the process.
+    atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
+    dest = os.path.join(tmpdir, os.path.basename(url))
+    # `manifold get` takes <bucket>/<path>, without the scheme.
+    argv = [manifold, "get", url.removeprefix("manifold://"), dest]
+    out = subprocess.run(argv, capture_output=True, text=True, check=False)
+    if out.returncode != 0 or not os.path.isfile(dest):
+        raise SystemExit(
+            f"compileiq_adapter: search-space download failed (exit {out.returncode}): {shlex.join(argv)}\n"
+            f"{out.stderr.strip()}"
+        )
+    with open(dest, "rb") as f:
+        sha256 = hashlib.sha256(f.read()).hexdigest()
+    # The URL (not the temp path) is what identifies the catalog, so that is what the sidecar keeps.
+    return dest, {
+        "source": "manifold",
+        "url": url,
+        "filename": os.path.basename(url),
+        "compiler_version": ptxas_version,
+        "sha256": sha256,
+    }
+
+
+def _resolve_search_space(ss: str, ptxas_version: str = ""):
     """Return ``(provider, provenance)`` for the engine's search space.
 
     An explicit ``PTX_ANNEAL_SS`` always wins -- it is how you pin a dev build or an out-of-band
-    asset. With none given, CompileIQ resolves its published catalog for (version, variant, tag) and
-    caches the artifact under ``~/.cache/compileiq/<tag>/``, so a plain checkout needs neither a
-    CompileIQ clone nor ``--ss``. ``CIQ_SEARCH_SPACES_DIR`` redirects that lookup at an offline
-    mirror without changing anything here.
+    asset. Next, when the ``manifold`` CLI is on PATH, the search space for this ``ptxas_version`` is
+    downloaded from manifold (see ``_fetch_search_space``). With neither, CompileIQ
+    resolves its published catalog for (version, variant, tag) and caches the artifact under
+    ``~/.cache/compileiq/<tag>/``, so a plain checkout needs neither a CompileIQ clone nor ``--ss``.
+    ``CIQ_SEARCH_SPACES_DIR`` redirects that lookup at an offline mirror without changing anything here.
 
     The provenance dict is handed back to the harness and lands in the ACF's sidecar. That matters
     precisely because the default tag is "latest": the search space is an *input* to tuning, so
@@ -118,6 +187,11 @@ def _resolve_search_space(ss: str):
         if not os.path.exists(ss):
             raise SystemExit(f"compileiq_adapter: search space not found: {ss!r} (set --ss / PTX_ANNEAL_SS)")
         return LocalSearchSpaceBin(ss), {"source": "PTX_ANNEAL_SS", "path": os.path.abspath(ss)}
+
+    fetched = _fetch_search_space(ptxas_version)
+    if fetched:
+        path, meta = fetched
+        return LocalSearchSpaceBin(path), meta
 
     # Forward version/variant/tag only when set, so the catalog's own default stays the single
     # source of truth instead of being duplicated (and left to rot) here.
@@ -148,7 +222,9 @@ def main() -> int:
     warmup = os.environ.get("PTX_ANNEAL_WARMUP", "25")
     rep = os.environ.get("PTX_ANNEAL_REP", "50")
     gens = int(os.environ.get("CIQ_GENERATIONS", "1"))
-    pool = int(os.environ.get("CIQ_POOL", "8"))
+    pool = int(os.environ.get("CIQ_POOL", "0"))
+    if pool == 0:
+        pool = None
     task_timeout = _env_num("CIQ_TASK_TIMEOUT", float)
     clock_mhz = _env_num("CIQ_CLOCK_MHZ", int)
 
@@ -164,7 +240,7 @@ def main() -> int:
         flush=True,
     )
 
-    search_space, ss_meta = _resolve_search_space(ss)
+    search_space, ss_meta = _resolve_search_space(ss, _ptxas_version(ptxas))
     src = ss_meta.get("source", "?")
     tag = ss_meta.get("resolved_tag")
     print(
