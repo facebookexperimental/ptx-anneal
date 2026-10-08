@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ptx_anneal.ptx_launch import _build_kernel_params, _pick_n, build_spec
+from ptx_anneal.ptx_launch import _build_kernel_params, _pick_n, build_spec, build_spec_from_schema
 
 
 # --- CUDA-graph unroll count (auto-N) -----------------------------------------------------------
@@ -110,3 +110,99 @@ def test_build_spec_cluster_survives_json_roundtrip():
     # The spec IS the ACF task's spec.json, so the cluster must survive serialization intact.
     spec = build_spec(_PTX, _md(ctas_per_cga=(2, 1, 1)), (4, 1, 1), _ARGS, "ptxas")
     assert json.loads(json.dumps(spec))["cluster"] == [2, 1, 1]
+
+
+# --- build_spec_from_schema: Level 0 launch-metadata replaces PTX parsing (prototype) --------------
+# A PTX with one user scalar param (p1) between the user pointer (p0) and the two trailing scratch ptrs.
+_PTX_SCALAR = """//
+.version 8.3
+.target sm_90a
+.address_size 64
+
+.visible .entry ks(
+    .param .u64 .ptr .global .align 16 p0,
+    .param .u32 p1,
+    .param .u64 .ptr .global .align 16 p2,
+    .param .u64 .ptr .global .align 16 p3
+)
+{
+    ret;
+}
+"""
+
+
+def _schema(**over):
+    """A Level 0 launch-metadata schema (see nvidia backend make_launch_metadata) for kernel `k`:
+    one *fp32 pointer param, entry `k`, no cluster/scratch. Override any field via kwargs."""
+    base = {
+        "entry_name": "k",
+        "num_warps": 4,
+        "num_ctas": 1,
+        "shared_mem": 0,
+        "cluster_dims": [1, 1, 1],
+        "global_scratch_size": 0,
+        "profile_scratch_size": 0,
+        "args": [{"name": "p0", "type": "*fp32", "index": 0}],
+        "tensordesc_meta": [],
+    }
+    base.update(over)
+    return base
+
+
+def test_from_schema_matches_build_spec_cluster():
+    # The whole point: schema-driven spec == PTX-parsed spec for the same 2-CTA kernel.
+    want = build_spec(_PTX, _md(ctas_per_cga=(2, 1, 1)), (4, 1, 1), _ARGS, "ptxas")
+    got = build_spec_from_schema(_schema(cluster_dims=[2, 1, 1]), _PTX, (4, 1, 1), _ARGS, "ptxas")
+    assert got == want
+    assert got["cluster"] == [2, 1, 1]
+
+
+def test_from_schema_matches_build_spec_no_cluster():
+    want = build_spec(_PTX, _md(ctas_per_cga=None), (4, 1, 1), _ARGS, "ptxas")
+    got = build_spec_from_schema(_schema(cluster_dims=[1, 1, 1]), _PTX, (4, 1, 1), _ARGS, "ptxas")
+    assert got == want
+    assert "cluster" not in got
+
+
+def test_from_schema_matches_build_spec_with_scalar():
+    # A pointer + an i32 scalar: schema types (*fp32, i32) reproduce the PTX-derived kinds.
+    args = [("tensor", {"id": 0, "shape": [16], "dtype": "float32", "strides": [1]}), ("scalar", 7)]
+    want = build_spec(_PTX_SCALAR, _md(), (4, 1, 1), args, "ptxas")
+    schema = _schema(
+        entry_name="ks",
+        args=[{"name": "p0", "type": "*fp32", "index": 0}, {"name": "p1", "type": "i32", "index": 1}],
+    )
+    got = build_spec_from_schema(schema, _PTX_SCALAR, (4, 1, 1), args, "ptxas")
+    assert got == want
+    assert got["args"] == [{"t": 0}, {"i32": 7}, {"null": True}, {"null": True}]
+
+
+def test_from_schema_parity_mismatch_raises():
+    # Schema says 2 params but only 1 runtime arg survives -> fail-open (never mis-collect).
+    schema = _schema(args=[{"type": "*fp32", "index": 0}, {"type": "i32", "index": 1}])
+    with pytest.raises(NotImplementedError):
+        build_spec_from_schema(schema, _PTX, (4, 1, 1), _ARGS, "ptxas")
+
+
+def test_from_schema_rejects_num_ctas_gt_1():
+    with pytest.raises(NotImplementedError):
+        build_spec_from_schema(_schema(num_ctas=2), _PTX, (4, 1, 1), _ARGS, "ptxas")
+
+
+def test_from_schema_tensordesc_not_supported():
+    # Documented prototype limitation: Level 0 schema lacks the flattened TMA leaf kinds.
+    td_args = [
+        (
+            "tensordesc",
+            {
+                "base": {"id": 0, "shape": [16, 16], "dtype": "float16", "strides": [16, 1]},
+                "desc_shape": [16, 16],
+                "desc_strides": [16, 1],
+                "block_shape": [16, 16],
+                "padding": 0,
+            },
+        )
+    ]
+    schema = _schema(args=[{"name": "d0", "type": "tensordesc<fp16>", "index": 0}])
+    with pytest.raises(NotImplementedError):
+        build_spec_from_schema(schema, _PTX, (4, 1, 1), td_args, "ptxas")
