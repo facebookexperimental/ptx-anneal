@@ -16,7 +16,7 @@ ptx-anneal --task <task_dir> --output <store_dir>
 ```
 
 `--task` is the only required argument. There is no `tune` subcommand — tuning is the
-default action (`doctor` and the internal `_score` are the only subcommands), and
+default action (`replay` benchmarks without tuning; `doctor` and the internal `_score` also exist), and
 `--store` is an alias for `--output`. `ptx-anneal --help` lists both forms, the
 option groups, and the environment-only knobs.
 

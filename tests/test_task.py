@@ -5,10 +5,14 @@
 
 import json
 import os
+import shutil
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from ptx_anneal import task
+from ptx_anneal import cli, task
 
 SAMPLE_TASK = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_tasks", "sample_task")
 
@@ -67,3 +71,119 @@ def test_default_task_root_env(monkeypatch):
     assert task.default_task_root() == "/tmp/ciq_tasks_xyz"
     monkeypatch.delenv(task.TASK_DIR_ENV, raising=False)
     assert task.default_task_root().endswith("/.compile_iq/tasks")
+
+
+@pytest.fixture
+def manifold_download(monkeypatch):
+    calls = []
+    monkeypatch.setattr(task.shutil, "which", lambda name: "/tools/manifold")
+
+    def download(argv, **kwargs):
+        assert argv[:2] == ["/tools/manifold", "get"]
+        assert kwargs["check"] is False and kwargs["timeout"] > 0
+        calls.append(argv)
+        shutil.copyfile(Path(SAMPLE_TASK) / Path(argv[2]).name, argv[3])
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(task.subprocess, "run", download)
+    return calls
+
+
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_remote_task_download_and_cleanup(manifold_download, suffix):
+    with task.local_task_dir("manifold://bucket/tree/task" + suffix) as local_dir:
+        assert task.load(local_dir).entry == "add_kernel"
+        assert [call[2] for call in manifold_download] == [
+            "bucket/tree/task/spec.json", "bucket/tree/task/kernel.ptx"
+        ]
+    assert not Path(local_dir).exists()
+
+
+def test_local_task_needs_no_manifold(monkeypatch):
+    def unexpected_lookup(name):
+        pytest.fail("local tasks must not look up a download tool")
+
+    monkeypatch.setattr(task.shutil, "which", unexpected_lookup)
+    with task.local_task_dir(Path(SAMPLE_TASK)) as local_dir:
+        assert local_dir == SAMPLE_TASK
+    assert Path(local_dir).is_dir()
+
+
+def test_remote_task_cleanup_on_caller_failure(manifold_download):
+    with (
+        pytest.raises(RuntimeError, match="replay failed"),
+        task.local_task_dir("manifold://bucket/tree/task") as local_dir,
+    ):
+        assert Path(local_dir).is_dir()
+        raise RuntimeError("replay failed")
+    assert not Path(local_dir).exists()
+
+
+@pytest.mark.parametrize("failure", ["nonzero", "missing_file", "timeout"])
+def test_failed_download_cleans_partial_task(monkeypatch, manifold_download, failure):
+    successful_download = task.subprocess.run
+    destinations = []
+
+    def download(argv, **kwargs):
+        destinations.append(Path(argv[3]))
+        if argv[2].endswith("/spec.json"):
+            return successful_download(argv, **kwargs)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, 120)
+        return SimpleNamespace(returncode=1 if failure == "nonzero" else 0, stderr="download failed", stdout="")
+
+    monkeypatch.setattr(task.subprocess, "run", download)
+    with pytest.raises(task.TaskError, match="failed to download manifold://bucket/tree/task/kernel.ptx"):
+        with task.local_task_dir("manifold://bucket/tree/task"):
+            pytest.fail("a partial download must not be passed to the scorer")
+    assert len(destinations) == 2
+    assert not destinations[0].parent.exists()
+
+
+def test_missing_manifold_cli_is_actionable(monkeypatch):
+    monkeypatch.setattr(task.shutil, "which", lambda name: None)
+    with pytest.raises(task.TaskError, match="'manifold' CLI on PATH"):
+        with task.local_task_dir("manifold://bucket/tree/task"):
+            pytest.fail("missing downloader must fail")
+
+
+@pytest.mark.parametrize("url", [
+    "https://bucket/task", "manifold:///tree/task", "manifold://bucket",
+    "manifold://bucket/tree/task?query=yes",
+])
+def test_invalid_task_url_rejected(url):
+    with pytest.raises(task.TaskError):
+        with task.local_task_dir(url):
+            pytest.fail("invalid URL must fail")
+
+
+@pytest.mark.parametrize("command", ["replay", "tune"])
+def test_cli_keeps_download_for_whole_run(monkeypatch, manifold_download, command):
+    used_dirs = []
+
+    def run(args):
+        used_dirs.append(args.task)
+        assert task.load(args.task).entry == "add_kernel"
+        return 0
+
+    monkeypatch.setattr(cli, "_cmd_" + command, run)
+    argv = ["replay"] if command == "replay" else []
+    assert cli.main([*argv, "--task", "manifold://bucket/tree/task"]) == 0
+    assert len(manifold_download) == 2
+    assert len(used_dirs) == 1 and not Path(used_dirs[0]).exists()
+
+
+@pytest.mark.parametrize("command", ["replay", "tune"])
+@pytest.mark.parametrize("filename", ["spec.json", "spec.json/", "kernel.ptx"])
+def test_cli_rejects_manifold_file_urls(manifold_download, capsys, command, filename):
+    argv = ["replay"] if command == "replay" else []
+    assert cli.main([*argv, "--task", f"manifold://bucket/tree/task/{filename}"]) == 1
+    assert "must name a directory, not a file; use manifold://bucket/tree/task" in capsys.readouterr().err
+    assert manifold_download == []
+
+
+def test_cli_reports_download_error_without_starting_replay(monkeypatch, capsys):
+    monkeypatch.setattr(task.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli, "_cmd_replay", lambda args: pytest.fail("replay started without task files"))
+    assert cli.main(["replay", "--task", "manifold://bucket/tree/task"]) == 1
+    assert "'manifold' CLI on PATH" in capsys.readouterr().err

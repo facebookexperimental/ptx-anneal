@@ -41,7 +41,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 SPEC_VERSION = 1
 
@@ -53,7 +59,48 @@ REQUIRED_FIELDS = ("entry", "arch", "shared", "block", "grid", "tensors", "args"
 
 
 class TaskError(ValueError):
-    """Raised when a task directory or its spec.json is missing/malformed."""
+    """Raised when a task cannot be fetched or its files are missing/malformed."""
+
+
+@contextmanager
+def local_task_dir(task_dir: str | os.PathLike[str]) -> Iterator[str]:
+    """Yield a local task directory, downloading a Manifold task for this context's lifetime.
+
+    Remote inputs must name a directory. Only the standalone ``manifold`` CLI
+    is needed; local tasks have no remote dependencies. Keep the context open until all scoring
+    subprocesses have finished using the downloaded files.
+    """
+    task_dir = os.fspath(task_dir)
+    if "://" not in task_dir:
+        yield task_dir
+        return
+    url = urlsplit(task_dir)
+    if url.scheme != "manifold":
+        raise TaskError(f"unsupported task URL scheme: {url.scheme!r}")
+    path = url.path.rstrip("/")
+    if not url.netloc or not path.strip("/") or url.query or url.fragment:
+        raise TaskError(f"expected manifold://<bucket>/<task directory>, got {task_dir!r}")
+    if path.rsplit("/", 1)[-1] in ("spec.json", "kernel.ptx"):
+        parent = "manifold://" + url.netloc + path.rsplit("/", 1)[0]
+        raise TaskError(f"Manifold --task must name a directory, not a file; use {parent}")
+    manifold = shutil.which("manifold")
+    if not manifold:
+        raise TaskError("a manifold:// task requires the 'manifold' CLI on PATH; alternatively download the task first")
+    source = url.netloc + path
+    with tempfile.TemporaryDirectory(prefix="ptx_anneal_task_") as local_dir:
+        for filename in ("spec.json", "kernel.ptx"):
+            remote = f"{source}/{filename}"
+            dest = os.path.join(local_dir, filename)
+            try:
+                result = subprocess.run(
+                    [manifold, "get", remote, dest], capture_output=True, text=True, timeout=120, check=False
+                )
+            except (OSError, subprocess.SubprocessError) as e:
+                raise TaskError(f"failed to download manifold://{remote}: {e}") from e
+            if result.returncode != 0 or not os.path.isfile(dest):
+                detail = result.stderr.strip() or result.stdout.strip() or "download did not create the requested file"
+                raise TaskError(f"failed to download manifold://{remote} (exit {result.returncode}): {detail}")
+        yield local_dir
 
 
 def default_task_root() -> str:

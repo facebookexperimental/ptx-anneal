@@ -65,14 +65,19 @@ PTX in, ACF out
 - `ptx_anneal/log/` — `Logger` ABC + `NullLogger` (default) / `StderrLogger`.
 - `ptx_anneal/factory.py` — the library orchestrator (search → validate → admit →
   store). Library API only — the CLI does not call it; see "Two tuning paths".
-- `ptx_anneal/task.py` — the task (`kernel.ptx` + `spec.json`) loader.
+- `ptx_anneal/task.py` — the task (`kernel.ptx` + `spec.json`) loader. `local_task_dir` also
+  materializes `manifold://` directory URLs via the optional external `manifold` CLI;
+  its context must outlive the whole replay/search, including scoring subprocesses.
 - `ptx_anneal/validate.py` — `Validator` ABC + `RelTolValidator`.
 - `ptx_anneal/ptx_launch.py` — the PTX-direct driver-launch benchmarking harness.
 - `ptx_anneal/adapters/` — engine adapters (standalone scripts run in the engine's
   own interpreter); `compileiq_adapter.py` is the bundled default.
 - `ptx_anneal/provision.py` / `cli.py` — toolchain detection (`ptx-anneal doctor`)
   and the CLI. Tuning is the *default* action (`--task`); `doctor` and the internal
-  `_score` are the only subcommands — there is no `tune` subcommand.
+  `_score`, plus `replay`, are the subcommands — there is no `tune` subcommand.
+- `ptx_anneal/replay.py` — standalone `replay --task`: assemble and benchmark PTX without an
+  engine or ACF. Uses lazy torch allocation and Triton TMA encoding with the CUDA driver;
+  supports BF16, strides and CTA clusters. Inputs are synthetic; this is not a correctness check.
 - `ptx_anneal/fingerprint.py` — the search-problem fingerprint both channels emit (stdlib only).
 - `e2e/` — the adhoc validation harness (`e2e.sh`, `kernels/`); never packaged.
   `MODE=tune` needs only the factory's deps; `kernels/` + `run.py` need torch+triton.
@@ -118,7 +123,7 @@ adapter — not the harness — must report its own identity.
 There are currently two, and they do not share code:
 
 1. **`ptx_anneal --task` (the CLI, what ships).** Tuning is the default action —
-   there is no `tune` subcommand (only `doctor` and the internal `_score`).
+   there is no `tune` subcommand (`replay` benchmarks without tuning; `doctor` and `_score` also exist).
    `cli._cmd_tune` scores the baseline
    by calling `run/cudapy_worker.py:score` directly, spawns the engine adapter as a
    subprocess, and admits through `LocalStore`. It imports only `provision`, `task`,
