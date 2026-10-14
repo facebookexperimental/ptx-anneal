@@ -15,6 +15,11 @@ these (e.g. fbtriton's collection hook writes one per compiled kernel).
 ptx-anneal --task <task_dir> --output <store_dir>
 ```
 
+For a `manifold://` task directory, `--upload-manifold` also uploads the admitted ACF and its
+provenance sidecar to `<task_directory>/compileiq_YYYYmmddHHMMSS/` (UTC). The flag is valid only
+with a Manifold task directory. No admission means no upload; an upload failure returns nonzero
+and leaves the local store files intact.
+
 `--task` is the only required argument. There is no `tune` subcommand — tuning is the
 default action (`replay` benchmarks without tuning; `doctor` and the internal `_score` also exist), and
 `--store` is an alias for `--output`. `ptx-anneal --help` lists both forms, the

@@ -40,6 +40,18 @@ records which one produced it (`resolved_tag` + `sha256`) in its `.acf.json` sid
 ptxas version and the engine build (`engine_info`) — so a result stays explainable after the catalog
 moves on. Pin `CIQ_SS_TAG` for reproducible runs.
 
+For a task stored on Manifold, add `--upload-manifold` to upload the admitted ACF and its
+`.acf.json` provenance sidecar back to that task directory:
+
+```bash
+ptx_anneal --task manifold://<bucket>/<task_directory> --upload-manifold
+```
+
+The files keep their version-tagged names under a new `compileiq_YYYYmmddHHMMSS` subdirectory
+(UTC, at upload time). This tuning-only flag requires a `manifold://` task directory. If no ACF
+is admitted, upload is skipped. An upload failure exits nonzero and preserves the local ACF
+and sidecar so they can be recovered without rerunning the search.
+
 Step 3. ACF consumption: On an ACF-store hit, re-assemble the kernel with the ACF (ptxas --apply-controls) and run the tuned SASS.
 ```bash
 TRITON_COMPILE_IQ_APPLY=1 COMPILE_IQ_STORE=$STORE python your_workload.py
@@ -125,6 +137,12 @@ then spawns the **engine adapter** as a subprocess and lets the engine drive the
 each candidate by calling this same binary back as `ptx_anneal _score`. The winner is admitted to a
 local filesystem store. The harness never imports the engine, so it can be a frozen binary and the
 engine can live in its own interpreter.
+
+Baseline and candidate scoring select the same implementation from the task spec. Ordinary
+contiguous tensors use cuda-python + NumPy. BF16, TMA and strided tensors use the torch-based
+PTX scorer (install `.[harness,cudapy]` from the checkout); TMA captures need the matching Triton
+descriptor encoder. Both paths check candidate outputs against an untuned run before timing,
+honor `--bench`, and use the selected `--ptxas` instead of a captured machine-specific path.
 
 ```
 ptx_anneal --task ──> baseline score (in-process)

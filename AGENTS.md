@@ -59,8 +59,11 @@ PTX in, ACF out
 - `ptx_anneal/store/` — `Store` ABC + `LocalStore` (filesystem). Keys are
   `(target, arch, ir_hash)`.
 - `ptx_anneal/run/` — `Runner` ABC + `LocalRunner` (single host) and `CudaPyRunner`
-  (torch-free: cuda-python + numpy worker). `cudapy_worker.py` is also what the CLI's
-  `_score` calls directly — see "Two tuning paths".
+  (torch-free: cuda-python + numpy worker). The CLI uses `scoring.py` to choose this worker
+  or the torch-based `PtxTarget` scorer from the task spec — see "Two tuning paths".
+- `ptx_anneal/scoring.py` — shared baseline/candidate dispatch for the CLI. Contiguous supported
+  NumPy dtypes use `cudapy_worker`; BF16, TMA and strided tensors use `PtxTarget.score_one`.
+  Pass the resolved ptxas pin through both paths so a captured spec cannot override it.
 - `ptx_anneal/search/` — `SearchBackend` ABC + the entry-point registry.
 - `ptx_anneal/log/` — `Logger` ABC + `NullLogger` (default) / `StderrLogger`.
 - `ptx_anneal/factory.py` — the library orchestrator (search → validate → admit →
@@ -68,6 +71,9 @@ PTX in, ACF out
 - `ptx_anneal/task.py` — the task (`kernel.ptx` + `spec.json`) loader. `local_task_dir` also
   materializes `manifold://` directory URLs via the optional external `manifold` CLI;
   its context must outlive the whole replay/search, including scoring subprocesses.
+  Tuning's `--upload-manifold` uploads the admitted ACF and its provenance sidecar under the
+  original remote task's `compileiq_YYYYmmddHHMMSS/` directory (UTC); preserve the original URL
+  when replacing `args.task` with a temporary local path.
 - `ptx_anneal/validate.py` — `Validator` ABC + `RelTolValidator`.
 - `ptx_anneal/ptx_launch.py` — the PTX-direct driver-launch benchmarking harness.
 - `ptx_anneal/adapters/` — engine adapters (standalone scripts run in the engine's
@@ -120,14 +126,15 @@ adapter — not the harness — must report its own identity.
 
 ## Two tuning paths (know which one you are editing)
 
-There are currently two, and they do not share code:
+There are two orchestration paths; they share the torch-based PTX scorer where applicable:
 
 1. **`ptx_anneal --task` (the CLI, what ships).** Tuning is the default action —
    there is no `tune` subcommand (`replay` benchmarks without tuning; `doctor` and `_score` also exist).
-   `cli._cmd_tune` scores the baseline
-   by calling `run/cudapy_worker.py:score` directly, spawns the engine adapter as a
-   subprocess, and admits through `LocalStore`. It imports only `provision`, `task`,
-   `store` and `target` — **not** `factory`, `SearchBackend` or any `Runner`.
+   `cli._cmd_tune` scores the baseline via `scoring.score`, spawns the engine adapter as a
+   subprocess, and admits through `LocalStore`. The `_score` callback uses the same dispatch:
+   `cudapy_worker` for ordinary contiguous tasks, `PtxTarget.score_one` for BF16/TMA/strides.
+   Both validate against untuned output. The CLI does **not** call `factory`, `SearchBackend`
+   or any `Runner`.
 2. **`factory.tune` (the library DI API).** Takes `Store`/`Runner`/`SearchBackend`/
    `Logger` implementations as arguments. Exercised by `tests/` only.
 

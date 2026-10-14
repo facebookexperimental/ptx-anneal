@@ -121,15 +121,15 @@ def _bundled_adapter() -> str:
     return os.path.join(base, "adapters", "compileiq_adapter.py")
 
 
-# -- _score: the per-candidate scorer (engine-free; cuda-python) ----------------------------------
+# -- _score: the per-candidate scorer (engine-free; selects a scorer from the task spec) ----------
 def _cmd_score(args) -> int:
     if args.ptxas:
         os.environ["TRITON_PTXAS_BLACKWELL_PATH"] = args.ptxas
-    from .run import cudapy_worker
+    from . import scoring
 
     acf = None if args.acf in (None, "NONE") else args.acf
     try:
-        ms = cudapy_worker.score(args.task, acf, args.warmup, args.rep, args.bench)
+        ms = scoring.score(args.task, acf, args.warmup, args.rep, args.bench, ptxas=_resolve_ptxas(args))
         print(f"MS {float(ms)}")
     except Exception as e:  # noqa: BLE001 - any failure is INVALID to the caller
         sys.stderr.write(f"[_score] {type(e).__name__}: {e}\n")
@@ -137,11 +137,13 @@ def _cmd_score(args) -> int:
     return 0
 
 
-def _score_one(task_dir: str, acf: str | None, warmup: int, rep: int, bench: str = "cudagraph") -> float:
-    from .run import cudapy_worker
+def _score_one(
+    task_dir: str, acf: str | None, warmup: int, rep: int, bench: str = "cudagraph", ptxas: str | None = None
+) -> float:
+    from . import scoring
 
     try:
-        return float(cudapy_worker.score(task_dir, acf, warmup, rep, bench))
+        return float(scoring.score(task_dir, acf, warmup, rep, bench, ptxas=ptxas))
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[baseline] {type(e).__name__}: {e}\n")
         return INVALID
@@ -204,7 +206,7 @@ def _cmd_tune(args) -> int:
     )
 
     # 1) baseline (no ACF), scored in-process by the harness.
-    baseline_ms = _score_one(args.task, None, args.warmup, args.rep, args.bench)
+    baseline_ms = _score_one(args.task, None, args.warmup, args.rep, args.bench, ptxas)
     baseline_ok = math.isfinite(baseline_ms)
     print(f"baseline: {f'{baseline_ms:.4f} ms' if baseline_ok else 'FAILED'} (bench={args.bench})")
 
@@ -246,6 +248,7 @@ def _cmd_tune(args) -> int:
     force_admit = os.environ.get("PTX_ANNEAL_FORCE_ADMIT", "") not in ("", "0")
     best_finite = bool(acf_hex) and isinstance(best_ms, (int, float)) and math.isfinite(best_ms)
     is_win = best_finite and baseline_ok and best_ms < baseline_ms
+    store_path = None
     if best_finite and baseline_ok and (is_win or force_admit):
         win = (baseline_ms - best_ms) / baseline_ms
         meta = {
@@ -305,6 +308,16 @@ def _cmd_tune(args) -> int:
     # channel that found nothing is exactly when you need to know whether it was even asked the same
     # question as the channel that did.
     print(fp_mod.render(_fingerprint(args, t, ptxas, ver, res)))
+    if args.upload_manifold:
+        if store_path is None:
+            print("Manifold upload skipped: no ACF admitted.")
+        else:
+            try:
+                uploaded = task_mod.upload_acf(args.task_source, store_path)
+            except task_mod.TaskError as e:
+                sys.stderr.write(f"[upload-manifold] {e}\nLocal ACF retained at {store_path}\n")
+                return 1
+            print(f"uploaded ACF and provenance -> {uploaded}")
     return 0
 
 
@@ -356,6 +369,12 @@ def build_parser() -> argparse.ArgumentParser:
     # worse error than argparse's usage message.
     g.add_argument("--task", required=True, help="local task directory or manifold:// task directory URL")
     g.add_argument("--output", "--store", dest="output", help="ACF store root (default: ~/.ptx_anneal/store)")
+    g.add_argument(
+        "--upload-manifold",
+        action="store_true",
+        help="upload the admitted ACF and provenance to the task's compileiq_YYYYmmddHHMMSS directory (UTC); "
+        "requires --task manifold://...",
+    )
 
     g = p.add_argument_group("scoring")
     g.add_argument(
@@ -416,13 +435,19 @@ def _score_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "doctor":
+        parser = argparse.ArgumentParser(prog="ptx_anneal doctor", description="Inspect the tuning toolchain.")
+        parser.parse_args(argv[1:])
         return _cmd_doctor()
     if argv and argv[0] == "_score":
         return _cmd_score(_score_parser().parse_args(argv[1:]))
     if argv and argv[0] == "replay":
         args, command = _replay_parser().parse_args(argv[1:]), _cmd_replay
     else:
-        args, command = build_parser().parse_args(argv), _cmd_tune
+        parser = build_parser()
+        args, command = parser.parse_args(argv), _cmd_tune
+        if args.upload_manifold and not args.task.startswith("manifold://"):
+            parser.error("--upload-manifold requires --task manifold://<bucket>/<task directory>")
+    args.task_source = args.task
     try:
         # Fetch once per invocation. The engine and its scorers share the same local files until
         # the whole run completes; cleanup also happens on failure or interruption.
