@@ -88,8 +88,14 @@ class PtxTarget(base.Target):
         return ptx_launch.parse_arch(ir)
 
     def score_one(
-        self, task, artifact_path: str | None, *, warmup: int = 100, rep: int = 200,
-        bench: str = "cudagraph", ptxas: str | None = None,
+        self,
+        task,
+        artifact_path: str | None,
+        *,
+        warmup: int = 100,
+        rep: int = 200,
+        bench: str = "cudagraph",
+        ptxas: str | None = None,
     ) -> float:
         try:
             import torch

@@ -93,9 +93,7 @@ def manifold_download(monkeypatch):
 def test_remote_task_download_and_cleanup(manifold_download, suffix):
     with task.local_task_dir("manifold://bucket/tree/task" + suffix) as local_dir:
         assert task.load(local_dir).entry == "add_kernel"
-        assert [call[2] for call in manifold_download] == [
-            "bucket/tree/task/spec.json", "bucket/tree/task/kernel.ptx"
-        ]
+        assert [call[2] for call in manifold_download] == ["bucket/tree/task/spec.json", "bucket/tree/task/kernel.ptx"]
     assert not Path(local_dir).exists()
 
 
@@ -147,10 +145,15 @@ def test_missing_manifold_cli_is_actionable(monkeypatch):
             pytest.fail("missing downloader must fail")
 
 
-@pytest.mark.parametrize("url", [
-    "https://bucket/task", "manifold:///tree/task", "manifold://bucket",
-    "manifold://bucket/tree/task?query=yes",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://bucket/task",
+        "manifold:///tree/task",
+        "manifold://bucket",
+        "manifold://bucket/tree/task?query=yes",
+    ],
+)
 def test_invalid_task_url_rejected(url):
     with pytest.raises(task.TaskError):
         with task.local_task_dir(url):

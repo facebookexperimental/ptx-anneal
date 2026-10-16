@@ -38,9 +38,7 @@ def replay(task: Task, ptxas: str, *, warmup: int = 25, rep: int = 50, bench: st
         if bench == "do_bench":
             ms = L.bench_ms_do_bench(kernel, spec["grid"], spec["block"], args, warmup=warmup, reps=rep)
         else:
-            ms = L.bench_ms_cudagraph(
-                kernel, spec["grid"], spec["block"], args, warmup=warmup, reps=max(rep // 10, 3)
-            )
+            ms = L.bench_ms_cudagraph(kernel, spec["grid"], spec["block"], args, warmup=warmup, reps=max(rep // 10, 3))
         return float(ms)
     finally:
         kernel.unload()

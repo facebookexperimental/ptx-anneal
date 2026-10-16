@@ -31,8 +31,21 @@ from ptx_anneal.target.ptx import ptx_ir_hash
 
 @triton.jit
 def matmul_kernel(
-    a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    M,
+    N,
+    K,
+    stride_am,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -62,8 +75,21 @@ def compile_and_spec(M, N, K, ptxas, dtype=torch.float16, device="cuda"):
     c = torch.empty((M, N), device=device, dtype=dtype)
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     h = matmul_kernel[grid](
-        a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
-        BLOCK_M, BLOCK_N, BLOCK_K,
+        a,
+        b,
+        c,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        c.stride(0),
+        c.stride(1),
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
     )
     torch.cuda.synchronize()
     ptx = h.asm["ptx"]
@@ -72,11 +98,18 @@ def compile_and_spec(M, N, K, ptxas, dtype=torch.float16, device="cuda"):
         ("tensor", {"shape": [M, K], "dtype": ds, "strides": list(a.stride())}),
         ("tensor", {"shape": [K, N], "dtype": ds, "strides": list(b.stride())}),
         ("tensor", {"shape": [M, N], "dtype": ds, "strides": list(c.stride())}),
-        ("scalar", M), ("scalar", N), ("scalar", K),
-        ("scalar", a.stride(0)), ("scalar", a.stride(1)),
-        ("scalar", b.stride(0)), ("scalar", b.stride(1)),
-        ("scalar", c.stride(0)), ("scalar", c.stride(1)),
-        ("constexpr",), ("constexpr",), ("constexpr",),  # BLOCK_M, BLOCK_N, BLOCK_K
+        ("scalar", M),
+        ("scalar", N),
+        ("scalar", K),
+        ("scalar", a.stride(0)),
+        ("scalar", a.stride(1)),
+        ("scalar", b.stride(0)),
+        ("scalar", b.stride(1)),
+        ("scalar", c.stride(0)),
+        ("scalar", c.stride(1)),
+        ("constexpr",),
+        ("constexpr",),
+        ("constexpr",),  # BLOCK_M, BLOCK_N, BLOCK_K
     ]
     spec = L.build_spec(ptx, h.metadata, tuple(grid), ordered, ptxas)
     spec["ir_hash"] = ptx_ir_hash(ptx)  # store key (sha256 of normalized PTX)

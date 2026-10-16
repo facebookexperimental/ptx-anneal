@@ -19,21 +19,28 @@ from ptx_anneal.task import Task
 
 def _spec(**tensor_overrides):
     return {
-        "entry": "k", "arch": "sm_100a", "shared": 100, "grid": [4, 1, 1], "block": [256, 1, 1],
+        "entry": "k",
+        "arch": "sm_100a",
+        "shared": 100,
+        "grid": [4, 1, 1],
+        "block": [256, 1, 1],
         "ptxas": "/stale/captured/ptxas",
         "tensors": [{"dtype": "float32", "shape": [2, 3], "strides": [3, 1], **tensor_overrides}],
         "args": [{"t": 0}],
     }
 
 
-@pytest.mark.parametrize("tensor, torch_needed", [
-    ({}, False),
-    ({"dtype": "float16"}, False),
-    ({"dtype": "bfloat16"}, True),
-    ({"dtype": "float64"}, True),
-    ({"strides": [1, 2]}, True),
-    ({"shape": [2, 1, 3], "strides": [3, 99, 1]}, False),
-])
+@pytest.mark.parametrize(
+    "tensor, torch_needed",
+    [
+        ({}, False),
+        ({"dtype": "float16"}, False),
+        ({"dtype": "bfloat16"}, True),
+        ({"dtype": "float64"}, True),
+        ({"strides": [1, 2]}, True),
+        ({"shape": [2, 1, 3], "strides": [3, 99, 1]}, False),
+    ],
+)
 def test_tensor_scorer_selection(tensor, torch_needed):
     assert scoring.needs_torch(_spec(**tensor)) is torch_needed
 
@@ -68,8 +75,26 @@ def test_cli_baseline_and_candidates_share_dispatch(monkeypatch):
     monkeypatch.setattr(scoring, "score", score)
     monkeypatch.setenv("TRITON_PTXAS_BLACKWELL_PATH", "")
     assert cli._score_one("/task", None, 2, 30, "do_bench", "/pin") == 0.5
-    assert cli.main(["_score", "--task", "/task", "--acf", "/cand", "--ptxas", "/pin",
-                     "--warmup", "2", "--rep", "30", "--bench", "do_bench"]) == 0
+    assert (
+        cli.main(
+            [
+                "_score",
+                "--task",
+                "/task",
+                "--acf",
+                "/cand",
+                "--ptxas",
+                "/pin",
+                "--warmup",
+                "2",
+                "--rep",
+                "30",
+                "--bench",
+                "do_bench",
+            ]
+        )
+        == 0
+    )
     assert score.call_args_list[0].args == ("/task", None, 2, 30, "do_bench")
     assert score.call_args_list[1].args == ("/task", "/cand", 2, 30, "do_bench")
     assert all(call.kwargs == {"ptxas": "/pin"} for call in score.call_args_list)
@@ -77,6 +102,7 @@ def test_cli_baseline_and_candidates_share_dispatch(monkeypatch):
 
 class Tensor:
     """The few tensor operations used by validation; never imports torch or numpy."""
+
     def __init__(self, values):
         self.values = values
 
@@ -99,9 +125,9 @@ class Tensor:
 @pytest.fixture
 def torch_launch(monkeypatch):
     state = SimpleNamespace(kernels=[], compiled=[], descriptors=[], events=[], measured=[], candidate=[2.0, 4.0])
-    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(
-        synchronize=lambda: state.events.append("sync")
-    )))
+    monkeypatch.setitem(
+        sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(synchronize=lambda: state.events.append("sync")))
+    )
     monkeypatch.delenv("PTX_ANNEAL_VALIDATOR", raising=False)
     monkeypatch.delenv("PTX_ANNEAL_REL_TOL", raising=False)
 
@@ -151,8 +177,10 @@ def torch_launch(monkeypatch):
 @pytest.mark.parametrize("bench", ["cudagraph", "do_bench"])
 def test_torch_scorer_validates_and_honors_launch_and_timing(torch_launch, bench):
     spec = {**_spec(dtype="bfloat16"), "cluster": [2, 1, 1]}
-    assert PtxTarget().score_one(Task("/task", "PTX", spec), "/candidate.acf", ptxas="/pin",
-                                 bench=bench, warmup=2, rep=40) == 0.125
+    assert (
+        PtxTarget().score_one(Task("/task", "PTX", spec), "/candidate.acf", ptxas="/pin", bench=bench, warmup=2, rep=40)
+        == 0.125
+    )
     assert torch_launch.compiled == [("/pin", None), ("/pin", "/candidate.acf")]
     assert torch_launch.measured == [{"warmup": 2, "reps": 4 if bench == "cudagraph" else 40}]
     assert all(k.unload.call_count == 1 for k in torch_launch.kernels)
