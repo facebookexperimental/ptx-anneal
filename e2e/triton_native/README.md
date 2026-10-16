@@ -118,13 +118,15 @@ combination, and the fingerprint records both so a mismatch is visible after the
 Drop a file in `../kernels/` that calls `register(KernelSpec(...))`. Four fields:
 
 ```python
-register(KernelSpec(
-    name="my_kernel",
-    make_inputs=lambda: (torch.randn(...),),   # () -> args
-    run_fn=my_kernel_wrapper,                  # (*inputs) -> torch.Tensor
-    ref_fn=lambda x: torch.some_reference(x),  # (*inputs) -> torch.Tensor, or None
-    rtol=5e-2,
-))
+register(
+    KernelSpec(
+        name="my_kernel",
+        make_inputs=lambda: (torch.randn(...),),  # () -> args
+        run_fn=my_kernel_wrapper,  # (*inputs) -> torch.Tensor
+        ref_fn=lambda x: torch.some_reference(x),  # (*inputs) -> torch.Tensor, or None
+        rtol=5e-2,
+    )
+)
 ```
 
 Optionally set a module-level `FINGERPRINT_CONFIG = {...}` naming the pinned config; it goes into

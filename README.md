@@ -40,10 +40,55 @@ records which one produced it (`resolved_tag` + `sha256`) in its `.acf.json` sid
 ptxas version and the engine build (`engine_info`) — so a result stays explainable after the catalog
 moves on. Pin `CIQ_SS_TAG` for reproducible runs.
 
+For a task stored on Manifold, add `--upload-manifold` to upload the admitted ACF and its
+`.acf.json` provenance sidecar back to that task directory:
+
+```bash
+ptx_anneal --task manifold://<bucket>/<task_directory> --upload-manifold
+```
+
+The files keep their version-tagged names under a new `compileiq_YYYYmmddHHMMSS` subdirectory
+(UTC, at upload time). This tuning-only flag requires a `manifold://` task directory. If no ACF
+is admitted, upload is skipped. An upload failure exits nonzero and preserves the local ACF
+and sidecar so they can be recovered without rerunning the search.
+
 Step 3. ACF consumption: On an ACF-store hit, re-assemble the kernel with the ACF (ptxas --apply-controls) and run the tuned SASS.
 ```bash
 TRITON_COMPILE_IQ_APPLY=1 COMPILE_IQ_STORE=$STORE python your_workload.py
 ```
+
+## Replay PTX without tuning
+
+`replay` assembles a captured task and benchmarks it without CompileIQ, a search space, or an ACF:
+
+```bash
+pip3 install '.[harness,cudapy]'  # from this checkout; no engine required
+ptx_anneal replay --task /path/to/task
+```
+
+The task directory must contain `kernel.ptx` and `spec.json`. Both replay and tuning accept a local
+directory or a `manifold://` directory URL (file URLs such as `spec.json` are rejected):
+
+```bash
+ptx_anneal replay --task manifold://tc_bench_ci/tree/magnon/aba5e3348816add4
+```
+
+Remote tasks require an authenticated `manifold` CLI on `PATH`. The two files are downloaded once
+to a temporary directory, which is removed when the run finishes, including on failure.
+Local tasks do not need Manifold.
+
+Replay supports BF16, strided tensors, host TMA descriptors and
+CTA clusters. Torch allocates tensors; Triton is used only to encode TMA descriptors, not to
+recompile the kernel. TMA tasks require a Triton version with the descriptor encoder used by
+the capture frontend (fbtriton for fbtriton captures).
+
+Inputs are deterministic synthetic tensors matching the captured shapes, dtypes and strides.
+Replay does not restore captured tensor values or check numerical correctness against original
+outputs. It prints `MS <milliseconds>` on success and exits nonzero on failure.
+
+Use `--bench do_bench` for L2-cold timing (default: `cudagraph`), and `--warmup` / `--rep` to set
+the timing budget. `--ptxas` pins the assembler; otherwise normal environment/PATH/wheel discovery
+applies. The captured spec's machine-specific `ptxas` path is ignored; the >= 13.3 floor still applies.
 
 ## An optional second channel: triton-native
 
@@ -92,6 +137,12 @@ then spawns the **engine adapter** as a subprocess and lets the engine drive the
 each candidate by calling this same binary back as `ptx_anneal _score`. The winner is admitted to a
 local filesystem store. The harness never imports the engine, so it can be a frozen binary and the
 engine can live in its own interpreter.
+
+Baseline and candidate scoring select the same implementation from the task spec. Ordinary
+contiguous tensors use cuda-python + NumPy. BF16, TMA and strided tensors use the torch-based
+PTX scorer (install `.[harness,cudapy]` from the checkout); TMA captures need the matching Triton
+descriptor encoder. Both paths check candidate outputs against an untuned run before timing,
+honor `--bench`, and use the selected `--ptxas` instead of a captured machine-specific path.
 
 ```
 ptx_anneal --task ──> baseline score (in-process)

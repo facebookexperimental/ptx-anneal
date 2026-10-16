@@ -4,6 +4,7 @@
 """The ``ptx_anneal`` command-line interface -- one binary for the whole ACF factory.
 
     ptx_anneal --task <task_dir> [--output <store>] [--ss <ss>]
+    ptx_anneal replay --task <task_dir>
     ptx_anneal doctor
 
 Per-run surface is just the task; the engine, its search space and ptxas are all provisioning, and
@@ -120,15 +121,15 @@ def _bundled_adapter() -> str:
     return os.path.join(base, "adapters", "compileiq_adapter.py")
 
 
-# -- _score: the per-candidate scorer (engine-free; cuda-python) ----------------------------------
+# -- _score: the per-candidate scorer (engine-free; selects a scorer from the task spec) ----------
 def _cmd_score(args) -> int:
     if args.ptxas:
         os.environ["TRITON_PTXAS_BLACKWELL_PATH"] = args.ptxas
-    from .run import cudapy_worker
+    from . import scoring
 
     acf = None if args.acf in (None, "NONE") else args.acf
     try:
-        ms = cudapy_worker.score(args.task, acf, args.warmup, args.rep, args.bench)
+        ms = scoring.score(args.task, acf, args.warmup, args.rep, args.bench, ptxas=_resolve_ptxas(args))
         print(f"MS {float(ms)}")
     except Exception as e:  # noqa: BLE001 - any failure is INVALID to the caller
         sys.stderr.write(f"[_score] {type(e).__name__}: {e}\n")
@@ -136,28 +137,24 @@ def _cmd_score(args) -> int:
     return 0
 
 
-def _score_one(task_dir: str, acf: str | None, warmup: int, rep: int, bench: str = "cudagraph") -> float:
-    from .run import cudapy_worker
+def _score_one(
+    task_dir: str, acf: str | None, warmup: int, rep: int, bench: str = "cudagraph", ptxas: str | None = None
+) -> float:
+    from . import scoring
 
     try:
-        return float(cudapy_worker.score(task_dir, acf, warmup, rep, bench))
+        return float(scoring.score(task_dir, acf, warmup, rep, bench, ptxas=ptxas))
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[baseline] {type(e).__name__}: {e}\n")
         return INVALID
 
 
-# -- tune: baseline -> spawn engine adapter -> admit ----------------------------------------------
-def _cmd_tune(args) -> int:
-    # --task is enforced by the parser (build_parser), so no check here.
+def _require_ptxas(args) -> tuple[str, str]:
+    """Resolve and check the one toolchain used for tuning and standalone replay."""
     ptxas = _resolve_ptxas(args)
     if not ptxas:
         raise SystemExit("ptx_anneal: no ptxas (set --ptxas / PTXAS / TRITON_PTXAS_BLACKWELL_PATH, or add to PATH)")
     os.environ["TRITON_PTXAS_BLACKWELL_PATH"] = ptxas
-
-    # Engine interpreter: default to THIS interpreter (install the engine into the same env as
-    # ptx_anneal). Override with --engine-python / $PTX_ANNEAL_ENGINE_PYTHON only for a separate env
-    # (e.g. when the harness is a frozen binary whose own interpreter can't import the engine).
-    engine_python = args.engine_python or os.environ.get("PTX_ANNEAL_ENGINE_PYTHON") or sys.executable
 
     # Hard version gate. An ACF is applied with `ptxas --apply-controls`, GA only from MIN_PTXAS on,
     # so an older ptxas can neither assemble nor consume one -- there is no fallback to offer.
@@ -168,6 +165,32 @@ def _cmd_tune(args) -> int:
             f"ptx_anneal: ptxas {ver or '?'} < {need}. Applying an ACF (`ptxas --apply-controls`) is "
             f"GA from {need} on; point PTXAS / TRITON_PTXAS_BLACKWELL_PATH at a {need}+ ptxas."
         )
+    return ptxas, ver
+
+
+def _cmd_replay(args) -> int:
+    from .replay import replay
+
+    try:
+        t = task_mod.load(args.task)
+        ptxas, ver = _require_ptxas(args)
+        print(f"replay: {t.entry} ; arch={t.arch} ; ptxas={ptxas} (V{ver}) ; inputs=synthetic", flush=True)
+        ms = replay(t, ptxas, warmup=args.warmup, rep=args.rep, bench=args.bench)
+        if not math.isfinite(ms) or ms <= 0:
+            raise RuntimeError(f"invalid replay timing: {ms}")
+        print(f"MS {ms}")
+        return 0
+    except Exception as e:  # noqa: BLE001 - a standalone replay must report failure with a nonzero exit
+        sys.stderr.write(f"[replay] {type(e).__name__}: {e}\n")
+        return 1
+
+
+# -- tune: baseline -> spawn engine adapter -> admit ----------------------------------------------
+def _cmd_tune(args) -> int:
+    # --task is enforced by the parser (build_parser), so no check here.
+    ptxas, ver = _require_ptxas(args)
+    # Override only when the engine lives in a separate interpreter.
+    engine_python = args.engine_python or os.environ.get("PTX_ANNEAL_ENGINE_PYTHON") or sys.executable
     # The engine stays bring-your-own: the bundled CompileIQ adapter is only the default.
     adapter = args.engine_adapter or os.environ.get("PTX_ANNEAL_ENGINE_ADAPTER") or _bundled_adapter()
     if not os.path.exists(adapter):
@@ -183,7 +206,7 @@ def _cmd_tune(args) -> int:
     )
 
     # 1) baseline (no ACF), scored in-process by the harness.
-    baseline_ms = _score_one(args.task, None, args.warmup, args.rep, args.bench)
+    baseline_ms = _score_one(args.task, None, args.warmup, args.rep, args.bench, ptxas)
     baseline_ok = math.isfinite(baseline_ms)
     print(f"baseline: {f'{baseline_ms:.4f} ms' if baseline_ok else 'FAILED'} (bench={args.bench})")
 
@@ -225,6 +248,7 @@ def _cmd_tune(args) -> int:
     force_admit = os.environ.get("PTX_ANNEAL_FORCE_ADMIT", "") not in ("", "0")
     best_finite = bool(acf_hex) and isinstance(best_ms, (int, float)) and math.isfinite(best_ms)
     is_win = best_finite and baseline_ok and best_ms < baseline_ms
+    store_path = None
     if best_finite and baseline_ok and (is_win or force_admit):
         win = (baseline_ms - best_ms) / baseline_ms
         meta = {
@@ -284,6 +308,16 @@ def _cmd_tune(args) -> int:
     # channel that found nothing is exactly when you need to know whether it was even asked the same
     # question as the channel that did.
     print(fp_mod.render(_fingerprint(args, t, ptxas, ver, res)))
+    if args.upload_manifold:
+        if store_path is None:
+            print("Manifold upload skipped: no ACF admitted.")
+        else:
+            try:
+                uploaded = task_mod.upload_acf(args.task_source, store_path)
+            except task_mod.TaskError as e:
+                sys.stderr.write(f"[upload-manifold] {e}\nLocal ACF retained at {store_path}\n")
+                return 1
+            print(f"uploaded ACF and provenance -> {uploaded}")
     return 0
 
 
@@ -292,10 +326,14 @@ def _cmd_doctor() -> int:
     return 0
 
 
-# `doctor` and `_score` are intercepted in main() before the parser sees them, so argparse cannot
+# Subcommands are intercepted in main() before the parser sees them, so argparse cannot
 # advertise them on its own -- spell the real surface out here. `_score` stays undocumented: it is
 # the internal per-candidate scorer the adapter calls back into, not a user command.
-_USAGE = "ptx_anneal --task <dir> [--output <store>] [options]\n       ptx_anneal doctor"
+_USAGE = (
+    "ptx_anneal --task <dir> [--output <store>] [options]\n"
+    "       ptx_anneal replay --task <dir> [options]\n"
+    "       ptx_anneal doctor"
+)
 
 _EPILOG = """\
 knobs with no flag (environment only):
@@ -329,8 +367,14 @@ def build_parser() -> argparse.ArgumentParser:
     g = p.add_argument_group("task")
     # Required here rather than checked later: it always was mandatory, and a late SystemExit is a
     # worse error than argparse's usage message.
-    g.add_argument("--task", required=True, help="a task directory (kernel.ptx + spec.json)")
+    g.add_argument("--task", required=True, help="local task directory or manifold:// task directory URL")
     g.add_argument("--output", "--store", dest="output", help="ACF store root (default: ~/.ptx_anneal/store)")
+    g.add_argument(
+        "--upload-manifold",
+        action="store_true",
+        help="upload the admitted ACF and provenance to the task's compileiq_YYYYmmddHHMMSS directory (UTC); "
+        "requires --task manifold://...",
+    )
 
     g = p.add_argument_group("scoring")
     g.add_argument(
@@ -363,6 +407,20 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _replay_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="ptx_anneal replay",
+        description="Assemble and benchmark captured PTX without an engine or ACF. Uses synthetic inputs; "
+        "does not validate against original outputs. Requires the harness and cudapy extras.",
+    )
+    p.add_argument("--task", required=True, help="local task directory or manifold:// task directory URL")
+    p.add_argument("--ptxas", help="ptxas >= 13.3 (otherwise use environment / PATH / installed nvcc wheel)")
+    p.add_argument("--warmup", type=int, default=25)
+    p.add_argument("--rep", type=int, default=50)
+    p.add_argument("--bench", choices=["cudagraph", "do_bench"], default="cudagraph")
+    return p
+
+
 def _score_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ptx_anneal _score", description="Score one candidate (internal).")
     p.add_argument("--task", required=True)
@@ -377,10 +435,28 @@ def _score_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "doctor":
+        parser = argparse.ArgumentParser(prog="ptx_anneal doctor", description="Inspect the tuning toolchain.")
+        parser.parse_args(argv[1:])
         return _cmd_doctor()
     if argv and argv[0] == "_score":
         return _cmd_score(_score_parser().parse_args(argv[1:]))
-    return _cmd_tune(build_parser().parse_args(argv))
+    if argv and argv[0] == "replay":
+        args, command = _replay_parser().parse_args(argv[1:]), _cmd_replay
+    else:
+        parser = build_parser()
+        args, command = parser.parse_args(argv), _cmd_tune
+        if args.upload_manifold and not args.task.startswith("manifold://"):
+            parser.error("--upload-manifold requires --task manifold://<bucket>/<task directory>")
+    args.task_source = args.task
+    try:
+        # Fetch once per invocation. The engine and its scorers share the same local files until
+        # the whole run completes; cleanup also happens on failure or interruption.
+        with task_mod.local_task_dir(args.task) as local_dir:
+            args.task = local_dir
+            return command(args)
+    except task_mod.TaskError as e:
+        sys.stderr.write(f"[task] {e}\n")
+        return 1
 
 
 if __name__ == "__main__":

@@ -87,47 +87,72 @@ class PtxTarget(base.Target):
 
         return ptx_launch.parse_arch(ir)
 
-    def score_one(self, task, artifact_path: str | None, *, warmup: int = 100, rep: int = 200) -> float:
-        import torch
+    def score_one(
+        self,
+        task,
+        artifact_path: str | None,
+        *,
+        warmup: int = 100,
+        rep: int = 200,
+        bench: str = "cudagraph",
+        ptxas: str | None = None,
+    ) -> float:
+        try:
+            import torch
+        except ImportError as e:
+            raise ScoreInvalid("this task requires torch: install 'ptx-anneal[harness,cudapy]'") from e
 
         from .. import ptx_launch as L
 
         ptx = task.ir
         spec = task.spec
-        ptxas = _resolve_ptxas(spec)
+        # The CLI's resolved pin must win over the collector's machine-specific spec path.
+        ptxas = ptxas or _resolve_ptxas(spec)
+        if bench not in ("cudagraph", "do_bench"):
+            raise ScoreInvalid(f"unknown benchmark method: {bench}")
 
         def run_and_snapshot(acf):
             cubin = L.ptxas_compile(ptx, ptxas, arch=spec["arch"], acf_path=acf)
-            k = L.load_cubin(cubin, spec["entry"], spec["shared"])
-            tensors = L.alloc_tensors(spec, seed=0)
-            tms, addrs = L.build_tensormaps(spec, tensors)  # [] for non-TMA kernels
-            ka = L.kernel_args_from_spec(spec, tensors, addrs)
-            k.launch(spec["grid"], spec["block"], ka)
-            torch.cuda.synchronize()
-            return k, tensors, ka, tms
+            k = L.load_cubin(cubin, spec["entry"], spec["shared"], cluster=spec.get("cluster"))
+            try:
+                tensors = L.alloc_tensors(spec, seed=0)
+                tms, addrs = L.build_tensormaps(spec, tensors)  # [] for non-TMA kernels
+                ka = L.kernel_args_from_spec(spec, tensors, addrs)
+                torch.cuda.synchronize()  # finish input initialization before the driver launch
+                k.launch(spec["grid"], spec["block"], ka)
+                torch.cuda.synchronize()
+                return k, tensors, ka, tms
+            except Exception:
+                k.unload()
+                raise
 
         try:
             # 1) baseline reference (no ACF).
-            _, ref_tensors, _, _tms0 = run_and_snapshot(None)
-            ref = [t.detach().clone() for t in ref_tensors]
+            baseline, ref, _, _tms0 = run_and_snapshot(None)
+            baseline.unload()
             # 2) candidate run (with the ACF, or baseline again when artifact_path is None). Keep `tms`
             #    alive: the TMA descriptors it holds are referenced by `ka` for the benchmark below.
             k, tensors, ka, tms = run_and_snapshot(artifact_path)
-            # 3) self-consistency: per-buffer relative deviation vs baseline, then the pluggable
-            #    validator accepts/rejects (an ACF only changes codegen, never the math). A rejection
-            #    (ValidationError) is converted to ScoreInvalid by the except below.
-            from ..validate import load_validator
+            try:
+                # 3) compare every buffer against independent untuned execution, including BF16.
+                # Keep the reference tensors themselves: the candidate has separate allocations,
+                # so an extra clone of multi-GB buffers is unnecessary.
+                from ..validate import load_validator
 
-            deviations = []
-            for r, cur in zip(ref, tensors, strict=True):
-                denom = max(r.float().abs().max().item(), 1e-9)
-                deviations.append((cur.float() - r.float()).abs().max().item() / denom)
-            load_validator().check(deviations)
-            # 4) benchmark via CUDA graph (the sole timing path; host launch overhead removed). `tms`
-            #    must stay alive across capture+replay (its TMA descriptors are referenced by `ka`).
-            ms = L.bench_ms_cudagraph(k, spec["grid"], spec["block"], ka, warmup=warmup, reps=max(rep // 10, 3))
-            del tms
-            return float(ms)
+                deviations = []
+                for r, cur in zip(ref, tensors, strict=True):
+                    denom = max(r.float().abs().max().item(), 1e-9)
+                    deviations.append((cur.float() - r.float()).abs().max().item() / denom)
+                load_validator().check(deviations)
+                # 4) preserve the CLI's selected timing method. Keep `tms` alive through timing.
+                if bench == "do_bench":
+                    ms = L.bench_ms_do_bench(k, spec["grid"], spec["block"], ka, warmup=warmup, reps=rep)
+                else:
+                    ms = L.bench_ms_cudagraph(k, spec["grid"], spec["block"], ka, warmup=warmup, reps=max(rep // 10, 3))
+                del tms
+                return float(ms)
+            finally:
+                k.unload()
         except ScoreInvalid:
             raise
         except Exception as e:
