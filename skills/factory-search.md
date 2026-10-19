@@ -16,7 +16,7 @@ ptx-anneal --task <task_dir> --output <store_dir>
 ```
 
 For a `manifold://<bucket>/<run>/tasks/<task-id>` task directory, `--upload-manifold` uploads
-the admitted kernel's store subtree to `manifold://<bucket>/<run>/store/<arch>/<ir_hash>/`.
+the admitted kernel's store subtree to `manifold://<bucket>/<run>/store/<arch>/<hash16>/`.
 It includes versioned ACFs, their provenance sidecars and optional cubins; repeated uploads refresh
 the same files. The flag validates the task URL before downloading. No admission means no upload;
 an upload failure returns nonzero and leaves the local store files intact.
@@ -25,7 +25,7 @@ Use `--task-list manifold://<bucket>/<run>/tasks` instead of `--task` to recursi
 every directory containing `kernel.ptx` and `spec.json`. Tasks run in sorted URL order, each
 in a fresh process, sequentially; all tuning options apply to every task. `--full-tune`
 uses the visible GPUs within each task. With `--upload-manifold`, each discovered task URL
-must end in `tasks/<task-id>`; its admitted ACF goes into that run's `store/<arch>/<ir_hash>/`.
+must end in `tasks/<task-id>`; its admitted ACF goes into that run's `store/<arch>/<hash16>/`.
 The batch continues after individual failures, prints a final summary, and exits nonzero if
 any task failed or no tasks were found. A completed task may have no admitted ACF.
 
@@ -47,7 +47,8 @@ What happens (PTX-direct — no frontend recompilation in the loop):
    candidate on failure (an ACF changes codegen, never the math).
 4. The fastest *correct* candidate is **admitted** and its artifact written to the
    store under `(target, arch, ir_hash)`, tagged by ptxas version. Files live in
-   `<store>/<arch>/<ir_hash>/<ir_hash>.<ptxas>.acf`, with the `.json` sidecar alongside.
+   `<store>/<arch>/<hash16>/<hash16>.<ptxas>.acf`, with the `.json` sidecar alongside.
+   The directory and filename use `hash16 = ir_hash[:16]`; the sidecar keeps the full hash.
 
 ## Reading the banner
 

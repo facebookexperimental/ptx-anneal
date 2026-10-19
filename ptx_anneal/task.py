@@ -163,7 +163,7 @@ def manifold_tasks(task_list: str) -> list[str]:
 
 
 def upload_store(task_dir: str, store_root: str, acf_path: str) -> str:
-    """Publish this task's store subtree under ``.../store/<arch>/<ir_hash>/``.
+    """Publish this task's store subtree under ``.../store/<arch>/<hash16>/``.
 
     Include all versioned ACFs, their provenance and optional cubins for this kernel, preserving
     paths relative to the store root. Other kernels and temporary files are not part of this task's

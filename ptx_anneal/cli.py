@@ -310,7 +310,7 @@ def _cmd_tune(args) -> int:
             # an installed library with no path to print, so the adapter reports its own identity.
             "engine_info": res.get("engine_info") or None,
         }
-        # Group artifacts under <arch>/<ir_hash>/, retaining version-tagged filenames. An ACF is
+        # Group artifacts under <arch>/<ir_hash[:16]>/, retaining version-tagged filenames. An ACF is
         # bound to its ptxas version, so different toolchains must coexist without overwriting one
         # another; the kernel identity stays version-free. Direct consumers must use this layout.
         store_path = LocalStore(args.output or default_store_root()).write(
@@ -464,7 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--upload-manifold",
         action="store_true",
-        help="upload the task's <arch>/<ptx_hash>/ store subtree to manifold://<bucket>/<run>/store; "
+        help="upload the task's <arch>/<hash16>/ store subtree to manifold://<bucket>/<run>/store; "
         "requires each task URL to have the form manifold://<bucket>/<run>/tasks/<task-id>",
     )
 

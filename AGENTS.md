@@ -58,9 +58,10 @@ PTX in, ACF out
   other targets such as AMD `gcn` are future registered plugins).
 - `ptx_anneal/store/` — `Store` ABC + `LocalStore` (filesystem). Keys are
   `(target, arch, ir_hash)`. New artifacts, sidecars and cubin caches live under
-  `<root>/<arch>/<ir_hash>/` with version-tagged filenames. Reads/listings also accept
-  the old flat layout, preferring nested artifacts. Direct-path consumers must use
-  the nested layout for newly written ACFs.
+  `<root>/<arch>/<hash16>/` with version-tagged filenames starting with the same 16-character
+  hash prefix. Sidecars retain the full `ir_hash`. Reads/listings also accept full-hash directories
+  and the old flat layout, preferring short nested artifacts. Direct-path consumers must use
+  the 16-character nested layout for newly written ACFs.
 - `ptx_anneal/run/` — `Runner` ABC + `LocalRunner` (single host) and `CudaPyRunner`
   (torch-free: cuda-python + numpy worker). The CLI uses `scoring.py` to choose this worker
   or the torch-based `PtxTarget` scorer from the task spec — see "Two tuning paths".
@@ -76,7 +77,7 @@ PTX in, ACF out
   its context must outlive the whole replay/search, including scoring subprocesses.
   `manifold_tasks` recursively discovers `spec.json` + `kernel.ptx` pairs for `--task-list`.
   Tuning's `--upload-manifold` maps `.../tasks/<task-id>` to `.../store` and uploads
-  the admitted kernel's `<arch>/<ir_hash>/` subtree (versioned ACFs, provenance sidecars and
+  the admitted kernel's `<arch>/<hash16>/` subtree (versioned ACFs, provenance sidecars and
   optional cubins). Preserve the original URL when replacing `args.task` with a temporary local path.
 - `ptx_anneal/validate.py` — `Validator` ABC + `RelTolValidator`.
 - `ptx_anneal/ptx_launch.py` — the PTX-direct driver-launch benchmarking harness.

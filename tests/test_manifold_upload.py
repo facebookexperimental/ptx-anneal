@@ -40,7 +40,7 @@ def tuning(monkeypatch, tmp_path):
         store=tmp_path / "store",
         arch=sample.arch,
         ir_hash=ir_hash,
-        remote_dir=f"{DESTINATION}/{sample.arch}/{ir_hash}",
+        remote_dir=f"{DESTINATION}/{sample.arch}/{ir_hash[:16]}",
     )
     monkeypatch.setattr(task.shutil, "which", lambda name: "/tools/manifold" if name == "manifold" else None)
     monkeypatch.setattr(cli, "_require_ptxas", lambda args: ("/ptxas", "13.3"))
@@ -83,15 +83,17 @@ def test_tuning_uploads_store_directly_under_run_store(tuning, source, capsys):
     assert cli.main(["--task", source, "--output", str(tuning.store), "--upload-manifold"]) == 0
     acf = next(tuning.store.rglob("*.acf"))
     assert acf.parent == tuning.store / "sm_100a" / acf.name.split(".", 1)[0]
+    assert acf.name == f"{tuning.ir_hash[:16]}.13.3.acf"
     remote_acf = f"{DESTINATION}/{acf.relative_to(tuning.store).as_posix()}"
     assert tuning.uploads[remote_acf] == acf.read_bytes() == bytes.fromhex("00abff")
     assert tuning.uploads[remote_acf + ".json"] == Path(str(acf) + ".json").read_bytes()
     meta = json.loads(tuning.uploads[remote_acf + ".json"])
     assert meta["ptxas_version"] == "13.3"
+    assert meta["ir_hash"] == tuning.ir_hash
     assert meta["engine_info"] == tuning.result["engine_info"]
     assert meta["search_space"] == tuning.result["search_space"]
     assert len(tuning.uploads) == 2
-    assert all(path.startswith(f"{DESTINATION}/sm_100a/{tuning.ir_hash}/") for path in tuning.uploads)
+    assert all(path.startswith(f"{DESTINATION}/sm_100a/{tuning.ir_hash[:16]}/") for path in tuning.uploads)
     assert f"uploaded task store -> manifold://{DESTINATION}" in capsys.readouterr().out
 
 

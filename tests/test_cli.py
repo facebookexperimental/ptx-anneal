@@ -99,7 +99,7 @@ def test_parallel_winner_is_admitted_using_baseline_gpu_timing(monkeypatch, tmp_
     if measured_ms < 1:
         assert len(artifacts) == 1
         metadata = json.loads(artifacts[0].read_text())
-        assert artifacts[0].parent == tmp_path / "sm_100a" / metadata["ir_hash"]
+        assert artifacts[0].parent == tmp_path / "sm_100a" / metadata["ir_hash"][:16]
         assert metadata["best_ms"] == measured_ms
         assert metadata["search_best_ms"] == 0.1
         assert metadata["budget"] == budget

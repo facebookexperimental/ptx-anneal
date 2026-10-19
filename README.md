@@ -40,18 +40,19 @@ records which one produced it (`resolved_tag` + `sha256`) in its `.acf.json` sid
 ptxas version and the engine build (`engine_info`) — so a result stays explainable after the catalog
 moves on. Pin `CIQ_SS_TAG` for reproducible runs.
 
-Artifacts are grouped by architecture and normalized PTX hash. With `--output store`,
-an admitted ACF and its sidecar are saved as:
+Artifacts are grouped by architecture and the first 16 characters of the normalized PTX hash
+(`hash16`). With `--output store`, an admitted ACF and its sidecar are saved as:
 
 ```text
-store/sm_100a/<ptx_hash>/
-  <ptx_hash>.13.3.acf
-  <ptx_hash>.13.3.acf.json
+store/sm_100a/<hash16>/
+  <hash16>.13.3.acf
+  <hash16>.13.3.acf.json
 ```
 
-Different ptxas versions coexist in the same kernel directory. `LocalStore` also reads
-older flat stores, preferring a nested artifact when both exist. Consumers that construct
-file paths directly must use the nested layout to find newly written ACFs. The default root
+The sidecar retains the full PTX hash. Different ptxas versions coexist in the same kernel
+directory. `LocalStore` also reads older full-hash directories and flat stores, preferring
+the short nested artifact when both exist. Consumers that construct file paths directly must
+use the 16-character nested layout to find newly written ACFs. The default root
 remains `$COMPILE_IQ_STORE` or `~/.compile_iq/store`; `--output` selects a different root.
 
 For a task stored on Manifold under `tasks/<task-id>`, add `--upload-manifold` to publish
@@ -61,7 +62,7 @@ its store subtree under the run's sibling `store` directory:
 python -m ptx_anneal.cli --task 'manifold://<bucket>/<run>/tasks/<task-id>' --upload-manifold
 ```
 
-The destination is `manifold://<bucket>/<run>/store/<arch>/<ptx_hash>/`, with no task-ID directory.
+The destination is `manifold://<bucket>/<run>/store/<arch>/<hash16>/`, with no task-ID directory.
 It preserves the local store layout and includes this kernel's versioned ACFs, their
 `.acf.json` provenance sidecars and any cached `.acf.cubin` files. Other kernels in the
 local store are excluded. Repeated uploads update the same destination files.
@@ -80,7 +81,7 @@ Discovery recursively finds directories containing both `kernel.ptx` and `spec.j
 then tunes them in sorted URL order. Each task runs in a separate process, one at a time;
 `--full-tune` uses all visible GPUs for candidate scoring within each task. All tuning
 options apply to every task. With `--upload-manifold`, each task URL must end in
-`tasks/<task-id>`, and results go to that run's `store/<arch>/<ptx_hash>/` directory.
+`tasks/<task-id>`, and results go to that run's `store/<arch>/<hash16>/` directory.
 Failures are reported while the remaining tasks continue. The final summary counts completed
 and failed tasks; the command exits nonzero if any task fails or no tasks are found.
 Completion does not imply an ACF was admitted. This option is for tuning only.
