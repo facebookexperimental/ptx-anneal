@@ -17,7 +17,7 @@ from ptx_anneal.target.ptx import ptx_ir_hash
 
 SAMPLE_TASK = Path(__file__).resolve().parents[1] / "sample_tasks" / "sample_task"
 REMOTE = "manifold://bucket/tree/run/tasks/task"
-DESTINATION = "bucket/tree/run/store/task"
+DESTINATION = "bucket/tree/run/store"
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ def tuning(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("source", [REMOTE, REMOTE + "/"])
-def test_tuning_uploads_store_to_sibling_task_id_directory(tuning, source, capsys):
+def test_tuning_uploads_store_directly_under_run_store(tuning, source, capsys):
     assert cli.main(["--task", source, "--output", str(tuning.store), "--upload-manifold"]) == 0
     acf = next(tuning.store.rglob("*.acf"))
     assert acf.parent == tuning.store / "sm_100a" / acf.name.split(".", 1)[0]
@@ -91,15 +91,14 @@ def test_tuning_uploads_store_to_sibling_task_id_directory(tuning, source, capsy
     assert meta["engine_info"] == tuning.result["engine_info"]
     assert meta["search_space"] == tuning.result["search_space"]
     assert len(tuning.uploads) == 2
+    assert all(path.startswith(f"{DESTINATION}/sm_100a/{tuning.ir_hash}/") for path in tuning.uploads)
     assert f"uploaded task store -> manifold://{DESTINATION}" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("suffix", ["", "/"])
 def test_manifold_store_url_matches_requested_layout(suffix):
     run = "tc_bench_ci/tree/magnon/aps-aps-v5_combo_inductorfix3_0910-0911-row9_dpp_dcb0-36ec92e9dd4c"
-    assert task.manifold_store_url(f"manifold://{run}/tasks/1e359f0358047d9e{suffix}") == (
-        f"manifold://{run}/store/1e359f0358047d9e"
-    )
+    assert task.manifold_store_url(f"manifold://{run}/tasks/1e359f0358047d9e{suffix}") == f"manifold://{run}/store"
 
 
 def test_upload_includes_task_versions_and_cubin_but_not_other_kernels(tuning):

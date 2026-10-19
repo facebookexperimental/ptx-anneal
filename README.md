@@ -55,13 +55,13 @@ file paths directly must use the nested layout to find newly written ACFs. The d
 remains `$COMPILE_IQ_STORE` or `~/.compile_iq/store`; `--output` selects a different root.
 
 For a task stored on Manifold under `tasks/<task-id>`, add `--upload-manifold` to publish
-its store subtree under the sibling `store/<task-id>` directory:
+its store subtree under the run's sibling `store` directory:
 
 ```bash
-python -m ptx_anneal --task 'manifold://<bucket>/<run>/tasks/<task-id>' --upload-manifold
+python -m ptx_anneal.cli --task 'manifold://<bucket>/<run>/tasks/<task-id>' --upload-manifold
 ```
 
-The destination is `manifold://<bucket>/<run>/store/<task-id>/<arch>/<ptx_hash>/`.
+The destination is `manifold://<bucket>/<run>/store/<arch>/<ptx_hash>/`, with no task-ID directory.
 It preserves the local store layout and includes this kernel's versioned ACFs, their
 `.acf.json` provenance sidecars and any cached `.acf.cubin` files. Other kernels in the
 local store are excluded. Repeated uploads update the same destination files.

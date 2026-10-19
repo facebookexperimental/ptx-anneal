@@ -110,16 +110,16 @@ def local_task_dir(task_dir: str | os.PathLike[str]) -> Iterator[str]:
 
 
 def manifold_store_url(task_dir: str) -> str:
-    """Map a captured task's ``.../tasks/<id>`` URL to its sibling ``.../store/<id>``."""
+    """Map a captured task's ``.../tasks/<id>`` URL to the run's sibling ``.../store``."""
     source = _manifold_task_path(task_dir)
     parts = source.split("/")
     if len(parts) < 4 or parts[-2] != "tasks" or any(part in ("", ".", "..") for part in parts):
         raise TaskError("--upload-manifold requires --task manifold://<bucket>/<run>/tasks/<task-id>")
-    return "manifold://" + "/".join([*parts[:-2], "store", parts[-1]])
+    return "manifold://" + "/".join([*parts[:-2], "store"])
 
 
 def upload_store(task_dir: str, store_root: str, acf_path: str) -> str:
-    """Publish this task's store subtree under ``.../store/<task-id>/<arch>/<ir_hash>/``.
+    """Publish this task's store subtree under ``.../store/<arch>/<ir_hash>/``.
 
     Include all versioned ACFs, their provenance and optional cubins for this kernel, preserving
     paths relative to the store root. Other kernels and temporary files are not part of this task's

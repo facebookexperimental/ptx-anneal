@@ -74,7 +74,7 @@ PTX in, ACF out
 - `ptx_anneal/task.py` — the task (`kernel.ptx` + `spec.json`) loader. `local_task_dir` also
   materializes `manifold://` directory URLs via the optional external `manifold` CLI;
   its context must outlive the whole replay/search, including scoring subprocesses.
-  Tuning's `--upload-manifold` maps `.../tasks/<task-id>` to `.../store/<task-id>` and uploads
+  Tuning's `--upload-manifold` maps `.../tasks/<task-id>` to `.../store` and uploads
   the admitted kernel's `<arch>/<ir_hash>/` subtree (versioned ACFs, provenance sidecars and
   optional cubins). Preserve the original URL when replacing `args.task` with a temporary local path.
 - `ptx_anneal/validate.py` — `Validator` ABC + `RelTolValidator`.

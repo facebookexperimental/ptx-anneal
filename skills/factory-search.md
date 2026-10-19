@@ -16,7 +16,7 @@ ptx-anneal --task <task_dir> --output <store_dir>
 ```
 
 For a `manifold://<bucket>/<run>/tasks/<task-id>` task directory, `--upload-manifold` uploads
-the admitted kernel's store subtree to `manifold://<bucket>/<run>/store/<task-id>/<arch>/<ir_hash>/`.
+the admitted kernel's store subtree to `manifold://<bucket>/<run>/store/<arch>/<ir_hash>/`.
 It includes versioned ACFs, their provenance sidecars and optional cubins; repeated uploads refresh
 the same files. The flag validates the task URL before downloading. No admission means no upload;
 an upload failure returns nonzero and leaves the local store files intact.

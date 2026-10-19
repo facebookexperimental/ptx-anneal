@@ -419,7 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--upload-manifold",
         action="store_true",
-        help="upload the task's store subtree to manifold://<bucket>/<run>/store/<task-id>; "
+        help="upload the task's <arch>/<ptx_hash>/ store subtree to manifold://<bucket>/<run>/store; "
         "requires --task manifold://<bucket>/<run>/tasks/<task-id>",
     )
 
