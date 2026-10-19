@@ -71,7 +71,7 @@ def _launch_and_snapshot(ptx, spec, ptxas, acf_path, host_inputs):
     """ptxas(ptx[,acf]) -> cubin -> alloc+HtoD -> launch -> sync -> DtoH all buffers. Returns
     (loaded_kernel, kernel_args, device_ptrs, [np output arrays]). Caller frees device_ptrs."""
     cubin = L.ptxas_compile(ptx, ptxas, arch=spec["arch"], acf_path=acf_path)
-    k = L.load_cubin(cubin, spec["entry"], spec["shared"])
+    k = L.load_cubin(cubin, spec["entry"], spec["shared"], cluster=spec.get("cluster"))
     ptrs = []
     for h in host_inputs:
         p = _chk(d.cuMemAlloc(h.nbytes))
@@ -102,10 +102,10 @@ def _launch_and_snapshot(ptx, spec, ptxas, acf_path, host_inputs):
     return k, ka, ptrs, snaps
 
 
-def score(task_dir, acf_path, warmup, rep, bench="cudagraph"):
+def score(task_dir, acf_path, warmup, rep, bench="cudagraph", *, ptxas=None):
     t = task_mod.load(task_dir)
     spec, ptx = t.spec, t.ir
-    ptxas = _resolve_ptxas(spec)
+    ptxas = ptxas or _resolve_ptxas(spec)
     host = _host_inputs(spec)
 
     # 1) baseline (no ACF) reference snapshot.

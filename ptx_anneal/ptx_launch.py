@@ -464,9 +464,12 @@ class _PreparedLaunch:
 
 
 class LoadedKernel:
-    """A cubin loaded into the current context, ready to launch."""
+    """A cubin loaded into the current context, with optional CTA cluster launch dimensions."""
 
-    def __init__(self, cubin: bytes, name: str, shared: int):
+    def __init__(self, cubin: bytes, name: str, shared: int, *, cluster=None):
+        self.cluster = tuple(cluster) if cluster is not None else (1, 1, 1)
+        if len(self.cluster) != 3 or any(not isinstance(c, int) or c < 1 for c in self.cluster):
+            raise ValueError(f"invalid cluster dimensions: {self.cluster}")
         _ensure_init()
         self.module = _chk(_drv.cuModuleLoadData(cubin))
         self.func = _chk(_drv.cuModuleGetFunction(self.module, name.encode()))
@@ -491,6 +494,9 @@ class LoadedKernel:
 
     def _prepare(self, grid, block, kernel_args) -> "_PreparedLaunch":
         """Internal: build the kernelParams array once (stable pointer for reuse / graph capture)."""
+        dims = (tuple(grid) + (1, 1, 1))[:3]
+        if any(g % c for g, c in zip(dims, self.cluster, strict=True)):
+            raise ValueError(f"grid {dims} is not divisible by cluster {self.cluster}")
         arr, holders = _build_kernel_params(kernel_args)
         return _PreparedLaunch(grid, block, arr, holders)
 
@@ -498,6 +504,19 @@ class LoadedKernel:
         """Internal: launch a pre-built :class:`_PreparedLaunch` on ``stream`` (0 = default; a real
         stream is used for graph capture)."""
         p = prepared
+        if self.cluster != (1, 1, 1):
+            attr = _drv.CUlaunchAttribute()
+            attr.id = _drv.CUlaunchAttributeID.CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION
+            attr.value.clusterDim.x, attr.value.clusterDim.y, attr.value.clusterDim.z = self.cluster
+            config = _drv.CUlaunchConfig()
+            config.gridDimX, config.gridDimY, config.gridDimZ = p.gx, p.gy, p.gz
+            config.blockDimX, config.blockDimY, config.blockDimZ = p.bx, p.by, p.bz
+            config.sharedMemBytes = self.shared
+            config.hStream = stream
+            config.attrs = [attr]
+            config.numAttrs = 1
+            _chk(_drv.cuLaunchKernelEx(config, self.func, int(ctypes.addressof(p.arr)), 0))
+            return
         _chk(
             _drv.cuLaunchKernel(
                 self.func,
@@ -517,15 +536,16 @@ class LoadedKernel:
     def launch(self, grid, block, kernel_args, stream=0):
         """kernel_args: ordered list of ('ptr', addr) | ('i32', int) | ('i64', int) | ('f32', float) |
         ('null',) | ('tma', addr_of_128B_tensormap). Builds the void** kernelParams array the frontend's
-        launcher would build and calls cuLaunchKernel. For 'tma' the param IS passed by value (128
+        launcher would build and calls cuLaunchKernel (cuLaunchKernelEx for clusters).
+        For 'tma' the param IS passed by value (128
         bytes), so the kernelParams slot points straight at the tensormap bytes -- the caller must keep
         the backing PyCUtensorMap objects alive across the launch."""
         self._launch_prepared(self._prepare(grid, block, kernel_args), stream)
 
 
-def load_cubin(cubin: bytes, name: str, shared: int) -> LoadedKernel:
+def load_cubin(cubin: bytes, name: str, shared: int, *, cluster=None) -> LoadedKernel:
     """Load cubin bytes into the current CUDA context and return a launchable handle."""
-    return LoadedKernel(cubin, name, shared)
+    return LoadedKernel(cubin, name, shared, cluster=cluster)
 
 
 # --------------------------------------------------------------------------------------

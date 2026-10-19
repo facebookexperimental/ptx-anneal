@@ -33,10 +33,11 @@ cat <store>/<arch>/<ir_hash>.<ptxas>.acf.json   # one artifact's provenance
 Or from Python, via the `Store` ABC:
 
 ```python
-from ptx_anneal.store import LocalStore, default_store_root   # default: ~/.ptx_anneal/store
+from ptx_anneal.store import LocalStore, default_store_root  # default: ~/.ptx_anneal/store
+
 s = LocalStore(default_store_root())
-s.list()                                            # every cached artifact
-s.read_meta("ptx", arch, ir_hash, toolchain_version="13.3")   # the sidecar
+s.list()  # every cached artifact
+s.read_meta("ptx", arch, ir_hash, toolchain_version="13.3")  # the sidecar
 ```
 
 ## The sidecar
