@@ -118,6 +118,50 @@ def manifold_store_url(task_dir: str) -> str:
     return "manifold://" + "/".join([*parts[:-2], "store"])
 
 
+def manifold_tasks(task_list: str) -> list[str]:
+    """Recursively discover task directories containing both spec.json and kernel.ptx.
+
+    Use the external CLI for discovery, then download one task at a time during tuning. Sorting
+    and deduplicating the URLs makes the run order independent of Manifold's listing order.
+    """
+    source = _manifold_task_path(task_list)
+    if any(part in ("", ".", "..") for part in source.split("/")):
+        raise TaskError(f"invalid Manifold task-list directory: {task_list!r}")
+    manifold = shutil.which("manifold")
+    if not manifold:
+        raise TaskError("--task-list requires the 'manifold' CLI on PATH")
+    try:
+        result = subprocess.run(
+            [manifold, "find", source, r"^(spec\.json|kernel\.ptx)$", "--regex", "--type", "f"],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise TaskError(f"failed to list tasks under {task_list}: {e}") from e
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise TaskError(f"failed to list tasks under {task_list} (exit {result.returncode}): {detail}")
+    files: dict[str, set[str]] = {}
+    for line in result.stdout.splitlines():
+        path = line.strip().removeprefix("manifold://")
+        if not path:
+            continue
+        parent, _, filename = path.rpartition("/")
+        if (
+            not path.startswith(source + "/")
+            or any(part in ("", ".", "..") for part in path.split("/"))
+            or filename not in ("spec.json", "kernel.ptx")
+        ):
+            raise TaskError(f"unexpected Manifold task-list entry: {line!r}")
+        files.setdefault(parent, set()).add(filename)
+    tasks = sorted("manifold://" + parent for parent, names in files.items() if names == {"spec.json", "kernel.ptx"})
+    if not tasks:
+        raise TaskError(f"no tasks containing spec.json and kernel.ptx found under {task_list}")
+    return tasks
+
+
 def upload_store(task_dir: str, store_root: str, acf_path: str) -> str:
     """Publish this task's store subtree under ``.../store/<arch>/<ir_hash>/``.
 

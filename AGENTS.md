@@ -74,6 +74,7 @@ PTX in, ACF out
 - `ptx_anneal/task.py` — the task (`kernel.ptx` + `spec.json`) loader. `local_task_dir` also
   materializes `manifold://` directory URLs via the optional external `manifold` CLI;
   its context must outlive the whole replay/search, including scoring subprocesses.
+  `manifold_tasks` recursively discovers `spec.json` + `kernel.ptx` pairs for `--task-list`.
   Tuning's `--upload-manifold` maps `.../tasks/<task-id>` to `.../store` and uploads
   the admitted kernel's `<arch>/<ir_hash>/` subtree (versioned ACFs, provenance sidecars and
   optional cubins). Preserve the original URL when replacing `args.task` with a temporary local path.
@@ -84,6 +85,9 @@ PTX in, ACF out
 - `ptx_anneal/provision.py` / `cli.py` — toolchain detection (`ptx-anneal doctor`)
   and the CLI. Tuning is the *default* action (`--task`); `doctor` and the internal
   `_score`, plus `replay`, are the subcommands — there is no `tune` subcommand.
+  `--task-list` replaces `--task` for a Manifold directory: tune sorted task URLs sequentially
+  in fresh harness subprocesses, forwarding all tuning options. Continue after failed tasks and
+  return nonzero if any failed. Each child owns its task download, CUDA context, search and upload.
 - `ptx_anneal/replay.py` — standalone `replay --task`: assemble and benchmark PTX without an
   engine or ACF. Uses lazy torch allocation and Triton TMA encoding with the CUDA driver;
   supports BF16, strides and CTA clusters. Inputs are synthetic; this is not a correctness check.

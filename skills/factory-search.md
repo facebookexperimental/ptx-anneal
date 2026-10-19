@@ -21,7 +21,15 @@ It includes versioned ACFs, their provenance sidecars and optional cubins; repea
 the same files. The flag validates the task URL before downloading. No admission means no upload;
 an upload failure returns nonzero and leaves the local store files intact.
 
-`--task` is the only required argument. There is no `tune` subcommand — tuning is the
+Use `--task-list manifold://<bucket>/<run>/tasks` instead of `--task` to recursively tune
+every directory containing `kernel.ptx` and `spec.json`. Tasks run in sorted URL order, each
+in a fresh process, sequentially; all tuning options apply to every task. `--full-tune`
+uses the visible GPUs within each task. With `--upload-manifold`, each discovered task URL
+must end in `tasks/<task-id>`; its admitted ACF goes into that run's `store/<arch>/<ir_hash>/`.
+The batch continues after individual failures, prints a final summary, and exits nonzero if
+any task failed or no tasks were found. A completed task may have no admitted ACF.
+
+Exactly one of `--task` and `--task-list` is required. There is no `tune` subcommand — tuning is the
 default action (`replay` benchmarks without tuning; `doctor` and the internal `_score` also exist), and
 `--store` is an alias for `--output`. `ptx-anneal --help` lists both forms, the
 option groups, and the environment-only knobs.
@@ -58,7 +66,7 @@ so only the adapter can report them. A bring-your-own adapter should print its o
 
 ## Knobs
 
-Per-run flags: `--task`, `--output`/`--store`, `--bench` (`cudagraph`|`do_bench`),
+Per-run flags: `--task`/`--task-list`, `--output`/`--store`, `--bench` (`cudagraph`|`do_bench`),
 `--warmup`, `--rep`, `--workers`, `--full-tune`, `--target`, and the pins `--ptxas`, `--ss`, `--engine-python`,
 `--engine-adapter`.
 

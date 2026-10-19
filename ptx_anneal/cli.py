@@ -4,6 +4,7 @@
 """The ``ptx_anneal`` command-line interface -- one binary for the whole ACF factory.
 
     ptx_anneal --task <task_dir> [--output <store>] [--ss <ss>]
+    ptx_anneal --task-list <manifold_dir> [--full-tune] [--upload-manifold]
     ptx_anneal replay --task <task_dir>
     ptx_anneal doctor
 
@@ -187,7 +188,7 @@ def _cmd_replay(args) -> int:
 
 # -- tune: baseline -> spawn engine adapter -> admit ----------------------------------------------
 def _cmd_tune(args) -> int:
-    # --task is enforced by the parser (build_parser), so no check here.
+    # Single-task invocations reach here; --task-list delegates to fresh --task subprocesses.
     ptxas, ver = _require_ptxas(args)
     gpus = None
     workers = args.workers
@@ -361,11 +362,52 @@ def _cmd_doctor() -> int:
     return 0
 
 
+def _cmd_tune_list(args) -> int:
+    print(f"Discovering tasks under {args.task_list} ...", flush=True)
+    try:
+        sources = task_mod.manifold_tasks(args.task_list)
+        if args.upload_manifold:
+            # Validate every upload destination before starting any search.
+            for source in sources:
+                task_mod.manifold_store_url(source)
+    except task_mod.TaskError as e:
+        sys.stderr.write(f"[task-list] {e}\n")
+        return 1
+
+    # The tuning parser's destinations match its long option names (underscores become hyphens).
+    # Forward every tuning option to each child, including pins and the shared local store root.
+    options = []
+    for name, value in vars(args).items():
+        if name in ("task", "task_list") or value is None or value is False:
+            continue
+        flag = "--" + name.replace("_", "-")
+        options.extend([flag] if value is True else [f"{flag}={value}"])
+
+    failed = 0
+    print(f"Found {len(sources)} tasks; tuning sequentially.", flush=True)
+    for index, source in enumerate(sources, 1):
+        print(f"\n[task-list {index}/{len(sources)}] {source}", flush=True)
+        # A fresh process releases CUDA contexts and tensor caches between tasks. Within each
+        # search, --full-tune / --workers still control parallel candidate scoring across GPUs.
+        try:
+            result = subprocess.run([*_harness_cmd(), "--task", source, *options], check=False)
+            code = result.returncode
+        except OSError as e:
+            sys.stderr.write(f"[task-list] {source}: {e}\n")
+            code = 1
+        if code != 0:
+            failed += 1
+            sys.stderr.write(f"[task-list] FAILED (exit {code}): {source}\n")
+    print(f"Task-list complete: {len(sources) - failed} completed, {failed} failed, {len(sources)} total.", flush=True)
+    return 1 if failed else 0
+
+
 # Subcommands are intercepted in main() before the parser sees them, so argparse cannot
 # advertise them on its own -- spell the real surface out here. `_score` stays undocumented: it is
 # the internal per-candidate scorer the adapter calls back into, not a user command.
 _USAGE = (
     "ptx_anneal --task <dir> [--output <store>] [options]\n"
+    "       ptx_anneal --task-list <manifold_dir> [--output <store>] [options]\n"
     "       ptx_anneal replay --task <dir> [options]\n"
     "       ptx_anneal doctor"
 )
@@ -407,9 +449,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     g = p.add_argument_group("task")
-    # Required here rather than checked later: it always was mandatory, and a late SystemExit is a
-    # worse error than argparse's usage message.
-    g.add_argument("--task", required=True, help="local task directory or manifold:// task directory URL")
+    source = g.add_mutually_exclusive_group(required=True)
+    source.add_argument("--task", help="local task directory or manifold:// task directory URL")
+    source.add_argument(
+        "--task-list",
+        help="Manifold directory URL; recursively discover and tune all tasks sequentially, continuing after failures",
+    )
     g.add_argument(
         "--output",
         "--store",
@@ -420,7 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--upload-manifold",
         action="store_true",
         help="upload the task's <arch>/<ptx_hash>/ store subtree to manifold://<bucket>/<run>/store; "
-        "requires --task manifold://<bucket>/<run>/tasks/<task-id>",
+        "requires each task URL to have the form manifold://<bucket>/<run>/tasks/<task-id>",
     )
 
     g = p.add_argument_group("search")
@@ -507,6 +552,10 @@ def main(argv=None) -> int:
     else:
         parser = build_parser()
         args, command = parser.parse_args(argv), _cmd_tune
+        if args.task_list is not None:
+            if not args.task_list.startswith("manifold://"):
+                parser.error("--task-list requires a manifold:// directory URL")
+            return _cmd_tune_list(args)
         if args.upload_manifold:
             if not args.task.startswith("manifold://"):
                 parser.error("--upload-manifold requires --task manifold://<bucket>/<run>/tasks/<task-id>")

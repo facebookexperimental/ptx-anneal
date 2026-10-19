@@ -69,6 +69,22 @@ This tuning-only flag validates the `tasks/<task-id>` URL before downloading the
 If no ACF is admitted, upload is skipped. An upload failure exits nonzero and preserves
 the local store files so they can be recovered without rerunning the search.
 
+To tune every task under a Manifold directory, use `--task-list` in place of `--task`:
+
+```bash
+python -m ptx_anneal.cli --task-list 'manifold://<bucket>/<run>/tasks' \
+  --full-tune --output store --upload-manifold
+```
+
+Discovery recursively finds directories containing both `kernel.ptx` and `spec.json`,
+then tunes them in sorted URL order. Each task runs in a separate process, one at a time;
+`--full-tune` uses all visible GPUs for candidate scoring within each task. All tuning
+options apply to every task. With `--upload-manifold`, each task URL must end in
+`tasks/<task-id>`, and results go to that run's `store/<arch>/<ptx_hash>/` directory.
+Failures are reported while the remaining tasks continue. The final summary counts completed
+and failed tasks; the command exits nonzero if any task fails or no tasks are found.
+Completion does not imply an ACF was admitted. This option is for tuning only.
+
 Step 3. ACF consumption: On an ACF-store hit, re-assemble the kernel with the ACF (ptxas --apply-controls) and run the tuned SASS.
 ```bash
 TRITON_COMPILE_IQ_APPLY=1 COMPILE_IQ_STORE=$STORE python your_workload.py
