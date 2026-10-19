@@ -144,6 +144,37 @@ PTX scorer (install `.[harness,cudapy]` from the checkout); TMA captures need th
 descriptor encoder. Both paths check candidate outputs against an untuned run before timing,
 honor `--bench`, and use the selected `--ptxas` instead of a captured machine-specific path.
 
+To score candidates from one search on multiple GPUs on the same host:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 ptx-anneal --task <task_dir> --workers 4
+```
+
+`--workers N` (or `PTX_ANNEAL_NUM_WORKERS=N`) enables CompileIQ's native multiprocessing
+with the first N devices from an explicit `CUDA_VISIBLE_DEVICES` list. GPU ordinals and UUIDs
+are supported. The default is one worker and the usual CUDA device selection. Each candidate
+leases one GPU and its `_score` subprocess sees only that device; the lease is released after
+the subprocess exits, including when `CIQ_TASK_TIMEOUT` kills it. Candidate counts are shared
+across workers, and candidate logs include the assigned GPU. No Ray cluster is needed.
+
+Use GPUs of the same model with comparable clocks: the engine ranks raw timings from all
+devices. After parallel search, the CLI revalidates and remeasures the winner on the original
+baseline GPU before deciding whether to admit it. The sidecar records both `search_best_ms`
+and the final `best_ms`, plus the worker count and GPU list in `budget`. `CIQ_POOL` controls
+the search population; it does not select devices or the worker count.
+
+Search budget defaults are `CIQ_GENERATIONS=1`, `CIQ_POOL=8`, and `CIQ_CULL=4`.
+Override them through the environment, for example:
+
+```bash
+CIQ_GENERATIONS=5 CIQ_POOL=32 CIQ_CULL=8 ptx-anneal --task <task_dir>
+```
+
+`CIQ_POOL=0` retains the engine-selected pool size. `CIQ_CULL` is forwarded as
+`SearchConfiguration.cull_size` and recorded in the result's `budget`. CompileIQ 1.1
+deprecates and ignores `cull_size`; setting it only controls culling on engine versions
+that support that setting.
+
 ```
 ptx_anneal --task ──> baseline score (in-process)
                 └───> $PTX_ANNEAL_ENGINE_ADAPTER (subprocess, engine's own interpreter)

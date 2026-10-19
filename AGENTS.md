@@ -135,6 +135,11 @@ There are two orchestration paths; they share the torch-based PTX scorer where a
    `cudapy_worker` for ordinary contiguous tasks, `PtxTarget.score_one` for BF16/TMA/strides.
    Both validate against untuned output. The CLI does **not** call `factory`, `SearchBackend`
    or any `Runner`.
+   `--workers N` / `PTX_ANNEAL_NUM_WORKERS` opts into native multiprocessing: the adapter leases
+   the first N entries of an explicit `CUDA_VISIBLE_DEVICES` list and pins each scorer's child
+   environment to one GPU. GPU leases and candidate counts must be shared across processes.
+   After parallel search, the CLI revalidates and remeasures the winner on its baseline GPU
+   before admission, retaining both search and final timings plus the scheduling budget.
 2. **`factory.tune` (the library DI API).** Takes `Store`/`Runner`/`SearchBackend`/
    `Logger` implementations as arguments. Exercised by `tests/` only.
 

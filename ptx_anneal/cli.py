@@ -220,6 +220,8 @@ def _cmd_tune(args) -> int:
     env["PTX_ANNEAL_RESULT"] = result_path
     env["PTX_ANNEAL_WARMUP"] = str(args.warmup)
     env["PTX_ANNEAL_REP"] = str(args.rep)
+    if args.workers is not None:
+        env["PTX_ANNEAL_NUM_WORKERS"] = str(args.workers)
     if args.ss:
         env["PTX_ANNEAL_SS"] = os.path.abspath(args.ss)
     try:
@@ -240,6 +242,23 @@ def _cmd_tune(args) -> int:
     best_ms = res.get("best_ms")
     acf_hex = res.get("acf")
     engine_name = os.path.basename(adapter).removesuffix(".py").removesuffix("_adapter")
+    search_best_ms = best_ms
+    budget = res.get("budget") or {}
+    if (
+        budget.get("num_workers", 1) > 1
+        and acf_hex
+        and isinstance(best_ms, (int, float))
+        and math.isfinite(best_ms)
+        and baseline_ok
+    ):
+        # Search timings may come from another GPU. Admission must compare the winner on the
+        # original baseline device, after all parallel scorers have exited.
+        with tempfile.TemporaryDirectory(prefix="ptx_anneal_winner_") as tmp:
+            acf_path = os.path.join(tmp, "winner.acf")
+            with open(acf_path, "wb") as f:
+                f.write(bytes.fromhex(acf_hex))
+            best_ms = _score_one(args.task, acf_path, args.warmup, args.rep, args.bench, ptxas)
+        print(f"winner on baseline GPU: {best_ms:.4f} ms (search={search_best_ms:.4f} ms)")
 
     # 3) admit. Normally only a finite candidate that BEAT the baseline is admitted. PTX_ANNEAL_FORCE_ADMIT
     #    (default off) admits the best *valid* candidate even without a win -- this is a SMOKE knob: it
@@ -258,6 +277,8 @@ def _cmd_tune(args) -> int:
             "entry": t.spec.get("entry"),
             "baseline_ms": baseline_ms,
             "best_ms": best_ms,
+            "search_best_ms": search_best_ms,
+            "budget": budget,
             "search_win": win,
             "forced": not is_win,
             "evaluated": evaluated,
@@ -339,7 +360,7 @@ _EPILOG = """\
 knobs with no flag (environment only):
   PTX_ANNEAL_FORCE_ADMIT   admit the best valid candidate even when it did not beat the baseline
                            (smoke knob: guarantees a real ACF lands so consume can be exercised)
-  CIQ_POOL / CIQ_GENERATIONS         engine budget (default 8 / 1 -- one batch, no evolution)
+  CIQ_POOL / CIQ_CULL / CIQ_GENERATIONS   engine budget (default 8 / 4 / 1 -- one batch, no evolution)
   CIQ_SS_TAG / CIQ_SS_VERSION / CIQ_SS_VARIANT   pin the published search-space catalog
   CIQ_SEARCH_SPACES_DIR    offline search-space mirror (no network)
 
@@ -352,6 +373,13 @@ notes:
   on, so an older ptxas can neither produce nor consume an ACF. A pinned --ptxas is used
   verbatim even when it is too old -- the whole toolchain must agree on one ptxas.
 """
+
+
+def _positive_int(value: str) -> int:
+    result = int(value)
+    if result < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -386,6 +414,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     g.add_argument("--warmup", type=int, default=25, help="benchmark warmup iters (default: %(default)s)")
     g.add_argument("--rep", type=int, default=50, help="benchmark measured iters (default: %(default)s)")
+    g.add_argument(
+        "--workers",
+        type=_positive_int,
+        help="CompileIQ native workers (default: $PTX_ANNEAL_NUM_WORKERS or 1); parallel scoring uses "
+        "the first N GPUs in an explicit CUDA_VISIBLE_DEVICES list, one candidate per GPU",
+    )
     g.add_argument("--target", default="ptx", help="target (default: %(default)s)")
 
     g = p.add_argument_group("provisioning pins", "all optional -- each of these self-provisions")

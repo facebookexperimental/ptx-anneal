@@ -57,7 +57,7 @@ so only the adapter can report them. A bring-your-own adapter should print its o
 ## Knobs
 
 Per-run flags: `--task`, `--output`/`--store`, `--bench` (`cudagraph`|`do_bench`),
-`--warmup`, `--rep`, `--target`, and the pins `--ptxas`, `--ss`, `--engine-python`,
+`--warmup`, `--rep`, `--workers`, `--target`, and the pins `--ptxas`, `--ss`, `--engine-python`,
 `--engine-adapter`.
 
 Environment:
@@ -68,15 +68,26 @@ Environment:
 | `PTX_ANNEAL_FORCE_ADMIT` | admit the best valid candidate even without a win (smoke knob) |
 | `PTX_ANNEAL_ENGINE_PYTHON` / `PTX_ANNEAL_ENGINE_ADAPTER` | engine interpreter / adapter script |
 | `PTX_ANNEAL_WORKER_PYTHON` | interpreter for the per-candidate benchmark (`CudaPyRunner`) |
-| `CIQ_POOL` / `CIQ_GENERATIONS` | engine budget (default 8 / 1 — one batch, no evolution) |
+| `PTX_ANNEAL_NUM_WORKERS` | native scoring concurrency (default 1); overridden by `--workers` |
+| `CUDA_VISIBLE_DEVICES` | device selection; parallel workers lease the first N distinct entries |
+| `CIQ_POOL` / `CIQ_CULL` / `CIQ_GENERATIONS` | engine budget (default 8 / 4 / 1 — one batch, no evolution) |
 | `CIQ_SS_TAG` / `CIQ_SS_VERSION` / `CIQ_SS_VARIANT` | pin the published search-space catalog |
 | `CIQ_SEARCH_SPACES_DIR` | offline search-space mirror (no network) |
 
 The `CIQ_*` knobs belong to the engine and are read by the adapter, not the harness.
+`CIQ_POOL=0` uses the engine-selected pool size. `CIQ_CULL` is forwarded as `cull_size`
+and recorded in the budget; CompileIQ 1.1 deprecates and ignores this setting.
 The minimum ptxas version is **not** a knob: it is fixed at `provision.MIN_PTXAS`
 (13.3). Applying an artifact (`ptxas --apply-controls`) is GA only from there on,
 and the frontend's ptxas decides the PTX ISA version it emits — so a lower floor
 just yields artifacts whose key nothing will ever match.
+
+For one search across four local GPUs, use
+`CUDA_VISIBLE_DEVICES=0,1,2,3 ptx-anneal --task <task_dir> --workers 4`.
+Parallel scoring requires an explicit device list and runs at most one candidate per selected
+GPU. Use the same GPU model and comparable clocks because search ranks raw milliseconds.
+The CLI revalidates and remeasures the winning ACF on the original baseline GPU before admission;
+the sidecar retains the search timing, final timing, worker count and GPU list.
 
 ## Reading results
 
@@ -104,6 +115,8 @@ Mind which of the two tuning paths you are reasoning about (see `AGENTS.md`):
   is reaped and scored `INVALID`.
 - **`ptx-anneal --task` (the CLI, what ships).** Each candidate is still scored in a
   separate `_score` subprocess, and any exception there is caught and reported as
-  `INVALID` — but that subprocess is spawned **without a timeout**, and `ptxas_compile`
-  has none either. A candidate that truly hangs will hang the run rather than being
-  reaped. Correctness is checked before timing in both paths.
+  `INVALID`. Set `CIQ_TASK_TIMEOUT` to bound each search candidate's scorer subprocess;
+  the default has no timeout. A timed-out scorer is killed and reaped before its GPU
+  lease is returned to other workers. The initial baseline and the final winner check
+  run in-process and are not covered by this search-candidate timeout.
+  Correctness is checked before timing in both paths.

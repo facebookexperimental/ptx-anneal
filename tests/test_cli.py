@@ -3,7 +3,10 @@
 # LICENSE file in the root directory of this source tree.
 """CLI tests: argument parsing, the _score subcommand, adapter wiring, and doctor formatting (no GPU)."""
 
+import json
 import os
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +23,65 @@ def test_tune_parser_defaults():
 def test_engine_overrides_parse():
     a = cli.build_parser().parse_args(["--engine-python", "/py", "--engine-adapter", "/a.py", "--task", "/t"])
     assert a.engine_python == "/py" and a.engine_adapter == "/a.py"
+
+
+@pytest.mark.parametrize("workers", ["0", "-1"])
+def test_workers_must_be_positive(workers):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--task", "/t", "--workers", workers])
+
+
+@pytest.mark.parametrize("measured_ms", [0.5, 2.0, float("inf")])
+def test_parallel_winner_is_admitted_using_baseline_gpu_timing(monkeypatch, tmp_path, measured_ms):
+    sample = Path(__file__).parents[1] / "sample_tasks" / "sample_task"
+    args = cli.build_parser().parse_args(["--task", str(sample), "--workers", "2", "--output", str(tmp_path)])
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3,7")
+    monkeypatch.setenv("PTX_ANNEAL_NUM_WORKERS", "9")  # Explicit flag wins over the environment.
+    monkeypatch.delenv("PTX_ANNEAL_FORCE_ADMIT", raising=False)
+    monkeypatch.setattr(cli, "_require_ptxas", lambda args: ("/ptxas", "13.3"))
+    monkeypatch.setattr(cli, "_fingerprint", lambda *a: {})
+    calls = []
+
+    def score(task, acf, warmup, rep, bench, ptxas):
+        assert os.environ["CUDA_VISIBLE_DEVICES"] == "3,7"
+        assert ptxas == "/ptxas"
+        if acf is None:
+            calls.append("baseline")
+            return 1.0
+        assert Path(acf).read_bytes() == b"acf"
+        calls.append("winner")
+        return measured_ms
+
+    def run_adapter(command, *, env, check):
+        calls.append("search")
+        assert env["PTX_ANNEAL_NUM_WORKERS"] == "2"
+        assert env["CUDA_VISIBLE_DEVICES"] == "3,7"
+        Path(env["PTX_ANNEAL_RESULT"]).write_text(
+            json.dumps(
+                {
+                    "acf": b"acf".hex(),
+                    "best_ms": 0.1,
+                    "evaluated": 4,
+                    "valid": 4,
+                    "budget": {"num_workers": 2, "gpus": ["3", "7"]},
+                }
+            )
+        )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli, "_score_one", score)
+    monkeypatch.setattr(cli.subprocess, "run", run_adapter)
+    assert cli._cmd_tune(args) == 0
+    assert calls == ["baseline", "search", "winner"]
+    artifacts = list(tmp_path.rglob("*.acf.json"))
+    if measured_ms < 1:
+        assert len(artifacts) == 1
+        metadata = json.loads(artifacts[0].read_text())
+        assert metadata["best_ms"] == measured_ms
+        assert metadata["search_best_ms"] == 0.1
+        assert metadata["budget"]["gpus"] == ["3", "7"]
+    else:
+        assert artifacts == []  # A fast score from another GPU cannot cause a false admission.
 
 
 def test_output_aliases_store():
