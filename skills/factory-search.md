@@ -15,10 +15,11 @@ these (e.g. fbtriton's collection hook writes one per compiled kernel).
 ptx-anneal --task <task_dir> --output <store_dir>
 ```
 
-For a `manifold://` task directory, `--upload-manifold` also uploads the admitted ACF and its
-provenance sidecar to `<task_directory>/compileiq_YYYYmmddHHMMSS/` (UTC). The flag is valid only
-with a Manifold task directory. No admission means no upload; an upload failure returns nonzero
-and leaves the local store files intact.
+For a `manifold://<bucket>/<run>/tasks/<task-id>` task directory, `--upload-manifold` uploads
+the admitted kernel's store subtree to `manifold://<bucket>/<run>/store/<task-id>/<arch>/<ir_hash>/`.
+It includes versioned ACFs, their provenance sidecars and optional cubins; repeated uploads refresh
+the same files. The flag validates the task URL before downloading. No admission means no upload;
+an upload failure returns nonzero and leaves the local store files intact.
 
 `--task` is the only required argument. There is no `tune` subcommand — tuning is the
 default action (`replay` benchmarks without tuning; `doctor` and the internal `_score` also exist), and
@@ -37,7 +38,8 @@ What happens (PTX-direct — no frontend recompilation in the loop):
    relative deviation is handed to the pluggable validator, which rejects the
    candidate on failure (an ACF changes codegen, never the math).
 4. The fastest *correct* candidate is **admitted** and its artifact written to the
-   store under `(target, arch, ir_hash)`, tagged by ptxas version.
+   store under `(target, arch, ir_hash)`, tagged by ptxas version. Files live in
+   `<store>/<arch>/<ir_hash>/<ir_hash>.<ptxas>.acf`, with the `.json` sidecar alongside.
 
 ## Reading the banner
 
@@ -57,8 +59,15 @@ so only the adapter can report them. A bring-your-own adapter should print its o
 ## Knobs
 
 Per-run flags: `--task`, `--output`/`--store`, `--bench` (`cudagraph`|`do_bench`),
-`--warmup`, `--rep`, `--workers`, `--target`, and the pins `--ptxas`, `--ss`, `--engine-python`,
+`--warmup`, `--rep`, `--workers`, `--full-tune`, `--target`, and the pins `--ptxas`, `--ss`, `--engine-python`,
 `--engine-adapter`.
+
+`--full-tune` sets 20 generations, pool size 32, and cull size 24. It overrides
+`CIQ_GENERATIONS`, `CIQ_POOL`, and `CIQ_CULL` in the adapter's environment for that run.
+It probes all CUDA-visible GPUs and starts one worker per GPU, respecting `CUDA_VISIBLE_DEVICES`
+and overriding `PTX_ANNEAL_NUM_WORKERS`. An explicit `--workers N` caps concurrency to the
+first N discovered GPUs. GPU discovery uses the CUDA driver without torch; an empty list
+or probe failure stops the run before scoring.
 
 Environment:
 
@@ -84,8 +93,9 @@ just yields artifacts whose key nothing will ever match.
 
 For one search across four local GPUs, use
 `CUDA_VISIBLE_DEVICES=0,1,2,3 ptx-anneal --task <task_dir> --workers 4`.
-Parallel scoring requires an explicit device list and runs at most one candidate per selected
-GPU. Use the same GPU model and comparable clocks because search ranks raw milliseconds.
+Parallel scoring uses an explicit device list or the list discovered by `--full-tune`, and
+runs at most one candidate per selected GPU. Use the same GPU model and comparable clocks
+because search ranks raw milliseconds.
 The CLI revalidates and remeasures the winning ACF on the original baseline GPU before admission;
 the sidecar retains the search timing, final timing, worker count and GPU list.
 

@@ -57,7 +57,10 @@ PTX in, ACF out
 - `ptx_anneal/target/` — `Target` ABC + the `ptx` target (the only v1 target;
   other targets such as AMD `gcn` are future registered plugins).
 - `ptx_anneal/store/` — `Store` ABC + `LocalStore` (filesystem). Keys are
-  `(target, arch, ir_hash)`.
+  `(target, arch, ir_hash)`. New artifacts, sidecars and cubin caches live under
+  `<root>/<arch>/<ir_hash>/` with version-tagged filenames. Reads/listings also accept
+  the old flat layout, preferring nested artifacts. Direct-path consumers must use
+  the nested layout for newly written ACFs.
 - `ptx_anneal/run/` — `Runner` ABC + `LocalRunner` (single host) and `CudaPyRunner`
   (torch-free: cuda-python + numpy worker). The CLI uses `scoring.py` to choose this worker
   or the torch-based `PtxTarget` scorer from the task spec — see "Two tuning paths".
@@ -71,9 +74,9 @@ PTX in, ACF out
 - `ptx_anneal/task.py` — the task (`kernel.ptx` + `spec.json`) loader. `local_task_dir` also
   materializes `manifold://` directory URLs via the optional external `manifold` CLI;
   its context must outlive the whole replay/search, including scoring subprocesses.
-  Tuning's `--upload-manifold` uploads the admitted ACF and its provenance sidecar under the
-  original remote task's `compileiq_YYYYmmddHHMMSS/` directory (UTC); preserve the original URL
-  when replacing `args.task` with a temporary local path.
+  Tuning's `--upload-manifold` maps `.../tasks/<task-id>` to `.../store/<task-id>` and uploads
+  the admitted kernel's `<arch>/<ir_hash>/` subtree (versioned ACFs, provenance sidecars and
+  optional cubins). Preserve the original URL when replacing `args.task` with a temporary local path.
 - `ptx_anneal/validate.py` — `Validator` ABC + `RelTolValidator`.
 - `ptx_anneal/ptx_launch.py` — the PTX-direct driver-launch benchmarking harness.
 - `ptx_anneal/adapters/` — engine adapters (standalone scripts run in the engine's
@@ -138,6 +141,9 @@ There are two orchestration paths; they share the torch-based PTX scorer where a
    `--workers N` / `PTX_ANNEAL_NUM_WORKERS` opts into native multiprocessing: the adapter leases
    the first N entries of an explicit `CUDA_VISIBLE_DEVICES` list and pins each scorer's child
    environment to one GPU. GPU leases and candidate counts must be shared across processes.
+   `--full-tune` probes CUDA-visible devices before scoring and supplies their list and count
+   automatically, respecting `CUDA_VISIBLE_DEVICES`; an explicit `--workers` caps concurrency.
+   Keep this probe torch-free and out of the bare-install/doctor path.
    After parallel search, the CLI revalidates and remeasures the winner on its baseline GPU
    before admission, retaining both search and final timings plus the scheduling budget.
 2. **`factory.tune` (the library DI API).** Takes `Store`/`Runner`/`SearchBackend`/

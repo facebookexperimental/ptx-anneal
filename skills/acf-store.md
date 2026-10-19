@@ -10,30 +10,35 @@ target the `ir_hash` is `sha256` of the normalized PTX (line/debug info stripped
 so cosmetic differences don't change the key). A local store is a directory tree:
 
 ```
-<store>/<arch>/<ir_hash>.<ptxas>.acf          # the tuning artifact (controls)
-<store>/<arch>/<ir_hash>.<ptxas>.acf.json     # provenance sidecar
-<store>/<arch>/<ir_hash>.<ptxas>.acf.cubin    # optional: assembled cubin cache
+<store>/<arch>/<ir_hash>/<ir_hash>.<ptxas>.acf          # the tuning artifact (controls)
+<store>/<arch>/<ir_hash>/<ir_hash>.<ptxas>.acf.json     # provenance sidecar
+<store>/<arch>/<ir_hash>/<ir_hash>.<ptxas>.acf.cubin    # optional: assembled cubin cache
 ```
 
-e.g. `sm_100a/8455732c….13.3.acf`. The **ptxas version is part of the filename**:
+e.g. `sm_100a/8455732c…/8455732c….13.3.acf`. The **ptxas version is part of the filename**:
 an ACF is bound to the ptxas that produced it, so ACFs from different ptxas
 versions coexist instead of overwriting each other. The kernel identity
 (`ir_hash`) stays version-free. (`LocalStore` also supports an untagged
 `<ir_hash>.acf` when written with no `toolchain_version`; the CLI always tags.)
+
+New writes use the kernel directory. Reads and listings support the older flat
+`<store>/<arch>/<filename>` layout, with nested artifacts taking precedence. Existing
+files are not moved or deleted. Consumers constructing paths directly must adopt the
+nested layout to find new ACFs.
 
 ## Inspecting
 
 There is no `store` subcommand — the store is plain files, so read them directly:
 
 ```bash
-ls <store>/<arch>/                              # list cached artifacts
-cat <store>/<arch>/<ir_hash>.<ptxas>.acf.json   # one artifact's provenance
+ls <store>/<arch>/<ir_hash>/                            # one kernel's cached artifacts
+cat <store>/<arch>/<ir_hash>/<ir_hash>.<ptxas>.acf.json   # one artifact's provenance
 ```
 
 Or from Python, via the `Store` ABC:
 
 ```python
-from ptx_anneal.store import LocalStore, default_store_root  # default: ~/.ptx_anneal/store
+from ptx_anneal.store import LocalStore, default_store_root  # default: ~/.compile_iq/store
 
 s = LocalStore(default_store_root())
 s.list()  # every cached artifact

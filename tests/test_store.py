@@ -3,7 +3,11 @@
 # LICENSE file in the root directory of this source tree.
 """Tests for the local artifact store (ptx_anneal.store.LocalStore)."""
 
+import json
 import os
+from pathlib import Path
+
+import pytest
 
 from ptx_anneal.store import LocalStore, default_store_root
 
@@ -25,8 +29,8 @@ def test_write_read_roundtrip(tmp_path):
     assert meta is not None
     assert meta["target"] == "ptx" and meta["arch"] == ARCH and meta["ir_hash"] == IR_HASH
     assert meta["engine"] == "baseline"
-    # path layout must be the frontend-compatible flat <arch>/<hash>.acf
-    assert p == os.path.join(str(tmp_path), ARCH, f"{IR_HASH}.acf")
+    assert p == os.path.join(str(tmp_path), ARCH, IR_HASH, f"{IR_HASH}.acf")
+    assert Path(p + ".json").parent == tmp_path / ARCH / IR_HASH
 
 
 def test_list(tmp_path):
@@ -47,7 +51,8 @@ def test_list(tmp_path):
 def test_cubin_cache_tagged_by_toolchain(tmp_path):
     s = LocalStore(str(tmp_path))
     assert s.read_cubin(ARCH, IR_HASH, "13.3") is None
-    s.write_cubin(ARCH, IR_HASH, "13.3", b"cubin-A")
+    path = s.write_cubin(ARCH, IR_HASH, "13.3", b"cubin-A")
+    assert Path(path) == tmp_path / ARCH / IR_HASH / f"{IR_HASH}.13.3.acf.cubin"
     assert s.read_cubin(ARCH, IR_HASH, "13.3") == b"cubin-A"
     # a different toolchain version must not serve the same cubin
     assert s.read_cubin(ARCH, IR_HASH, "13.4") is None
@@ -56,17 +61,67 @@ def test_cubin_cache_tagged_by_toolchain(tmp_path):
 
 
 def test_acf_is_tagged_by_toolchain_version(tmp_path):
-    # The CLI always passes toolchain_version, so the shipped layout is <hash>.<ptxas>.acf. ACFs from
-    # different ptxas versions must coexist rather than overwrite each other.
+    # All toolchain versions coexist inside the kernel's hash directory.
     s = LocalStore(str(tmp_path))
     p133 = s.write("ptx", ARCH, IR_HASH, b"acf-133", meta={}, toolchain_version="13.3")
     p134 = s.write("ptx", ARCH, IR_HASH, b"acf-134", meta={}, toolchain_version="13.4")
-    assert p133 == os.path.join(str(tmp_path), ARCH, f"{IR_HASH}.13.3.acf")
+    assert p133 == os.path.join(str(tmp_path), ARCH, IR_HASH, f"{IR_HASH}.13.3.acf")
     assert p133 != p134
     assert s.read("ptx", ARCH, IR_HASH, toolchain_version="13.3") == b"acf-133"
     assert s.read("ptx", ARCH, IR_HASH, toolchain_version="13.4") == b"acf-134"
     # an untagged lookup must not silently serve a tagged artifact
     assert s.read("ptx", ARCH, IR_HASH) is None
+    assert {e["toolchain_version"] for e in s.list()} == {"13.3", "13.4"}
+
+
+def _write_flat_artifact(root, version="13.3"):
+    suffix = f".{version}" if version else ""
+    path = root / ARCH / f"{IR_HASH}{suffix}.acf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"flat-acf")
+    Path(str(path) + ".json").write_text(json.dumps({"target": "ptx", "engine": "flat-engine"}))
+    return path
+
+
+@pytest.mark.parametrize("version", ["", "13.3"])
+def test_read_legacy_flat_store(tmp_path, version):
+    path = _write_flat_artifact(tmp_path, version)
+    store = LocalStore(str(tmp_path))
+    assert store.has("ptx", ARCH, IR_HASH, version)
+    assert store.read("ptx", ARCH, IR_HASH, version) == b"flat-acf"
+    assert store.read_meta("ptx", ARCH, IR_HASH, version)["engine"] == "flat-engine"
+    entries = store.list(target="ptx", arch=ARCH)
+    assert len(entries) == 1 and entries[0]["path"] == str(path)
+    assert entries[0]["toolchain_version"] == (version or None)
+    assert store.list(target="gcn") == []
+
+
+def test_nested_artifact_wins_without_duplicating_legacy_entry(tmp_path):
+    flat = _write_flat_artifact(tmp_path)
+    other_version = _write_flat_artifact(tmp_path, "13.4")
+    store = LocalStore(str(tmp_path))
+    nested = store.write("ptx", ARCH, IR_HASH, b"nested-acf", {"engine": "nested-engine"}, "13.3")
+    assert store.read("ptx", ARCH, IR_HASH, "13.3") == b"nested-acf"
+    assert store.read_meta("ptx", ARCH, IR_HASH, "13.3")["engine"] == "nested-engine"
+    entries = store.list()
+    assert [e["path"] for e in entries] == [nested, str(other_version)]
+    assert [e["meta"]["engine"] for e in entries] == ["nested-engine", "flat-engine"]
+    assert flat.read_bytes() == b"flat-acf"  # Writing the new layout does not migrate or remove old files.
+
+
+def test_nested_artifact_never_uses_flat_metadata_or_cubin(tmp_path):
+    flat = _write_flat_artifact(tmp_path)
+    Path(str(flat) + ".cubin").write_bytes(b"flat-cubin")
+    store = LocalStore(str(tmp_path))
+    assert store.read_cubin(ARCH, IR_HASH, "13.3") == b"flat-cubin"
+    nested = store.write("ptx", ARCH, IR_HASH, b"new-acf", toolchain_version="13.3")
+    Path(nested + ".json").unlink()
+    assert store.read_meta("ptx", ARCH, IR_HASH, "13.3") is None
+    assert store.list()[0]["meta"] == {}
+    assert store.read_cubin(ARCH, IR_HASH, "13.3") is None
+    store.write_cubin(ARCH, IR_HASH, "13.3", b"new-cubin")
+    assert store.read_cubin(ARCH, IR_HASH, "13.3") == b"new-cubin"
+    assert len(store.list()) == 1
 
 
 def test_sidecar_carries_full_provenance(tmp_path):
