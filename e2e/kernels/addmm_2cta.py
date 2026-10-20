@@ -17,7 +17,6 @@ import torch
 
 from ..registry import KernelSpec, register
 
-# pyre-ignore[21]: dashed tlx tutorial module, resolvable only by name.
 _tut = importlib.import_module("triton.language.extra.tlx.tutorials.blackwell-triton-addmm-2cta_test")
 
 # The tutorial's own correctness tests only cover small shapes -- (128,128,64) and (256,256,128) for
