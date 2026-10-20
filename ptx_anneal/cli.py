@@ -4,6 +4,7 @@
 """The ``ptx_anneal`` command-line interface -- one binary for the whole ACF factory.
 
     ptx_anneal --task <task_dir> [--output <store>] [--ss <ss>]
+    ptx_anneal --task-list <manifold_dir> [--full-tune] [--upload-manifold]
     ptx_anneal replay --task <task_dir>
     ptx_anneal doctor
 
@@ -187,8 +188,21 @@ def _cmd_replay(args) -> int:
 
 # -- tune: baseline -> spawn engine adapter -> admit ----------------------------------------------
 def _cmd_tune(args) -> int:
-    # --task is enforced by the parser (build_parser), so no check here.
+    # Single-task invocations reach here; --task-list delegates to fresh --task subprocesses.
     ptxas, ver = _require_ptxas(args)
+    gpus = None
+    workers = args.workers
+    if args.full_tune:
+        try:
+            gpus = provision.visible_gpus()
+        except RuntimeError as e:
+            raise SystemExit(f"ptx_anneal: --full-tune: {e}") from e
+        if not gpus:
+            raise SystemExit("ptx_anneal: --full-tune: no CUDA-visible GPUs available")
+        workers = len(gpus) if workers is None else workers
+        if workers > len(gpus):
+            raise SystemExit(f"ptx_anneal: --workers {workers} exceeds the {len(gpus)} CUDA-visible GPUs")
+        print(f"full tune: detected GPUs={','.join(gpus)} ; workers={workers}", flush=True)
     # Override only when the engine lives in a separate interpreter.
     engine_python = args.engine_python or os.environ.get("PTX_ANNEAL_ENGINE_PYTHON") or sys.executable
     # The engine stays bring-your-own: the bundled CompileIQ adapter is only the default.
@@ -220,6 +234,11 @@ def _cmd_tune(args) -> int:
     env["PTX_ANNEAL_RESULT"] = result_path
     env["PTX_ANNEAL_WARMUP"] = str(args.warmup)
     env["PTX_ANNEAL_REP"] = str(args.rep)
+    if workers is not None:
+        env["PTX_ANNEAL_NUM_WORKERS"] = str(workers)
+    if args.full_tune:
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(gpus)
+        env.update(CIQ_GENERATIONS="20", CIQ_POOL="32", CIQ_CULL="24")
     if args.ss:
         env["PTX_ANNEAL_SS"] = os.path.abspath(args.ss)
     try:
@@ -240,6 +259,23 @@ def _cmd_tune(args) -> int:
     best_ms = res.get("best_ms")
     acf_hex = res.get("acf")
     engine_name = os.path.basename(adapter).removesuffix(".py").removesuffix("_adapter")
+    search_best_ms = best_ms
+    budget = res.get("budget") or {}
+    if (
+        budget.get("num_workers", 1) > 1
+        and acf_hex
+        and isinstance(best_ms, (int, float))
+        and math.isfinite(best_ms)
+        and baseline_ok
+    ):
+        # Search timings may come from another GPU. Admission must compare the winner on the
+        # original baseline device, after all parallel scorers have exited.
+        with tempfile.TemporaryDirectory(prefix="ptx_anneal_winner_") as tmp:
+            acf_path = os.path.join(tmp, "winner.acf")
+            with open(acf_path, "wb") as f:
+                f.write(bytes.fromhex(acf_hex))
+            best_ms = _score_one(args.task, acf_path, args.warmup, args.rep, args.bench, ptxas)
+        print(f"winner on baseline GPU: {best_ms:.4f} ms (search={search_best_ms:.4f} ms)")
 
     # 3) admit. Normally only a finite candidate that BEAT the baseline is admitted. PTX_ANNEAL_FORCE_ADMIT
     #    (default off) admits the best *valid* candidate even without a win -- this is a SMOKE knob: it
@@ -258,6 +294,8 @@ def _cmd_tune(args) -> int:
             "entry": t.spec.get("entry"),
             "baseline_ms": baseline_ms,
             "best_ms": best_ms,
+            "search_best_ms": search_best_ms,
+            "budget": budget,
             "search_win": win,
             "forced": not is_win,
             "evaluated": evaluated,
@@ -272,11 +310,9 @@ def _cmd_tune(args) -> int:
             # an installed library with no path to print, so the adapter reports its own identity.
             "engine_info": res.get("engine_info") or None,
         }
-        # Write VERSION-TAGGED ("<ir_hash>.<ptxas>.acf"): an ACF is bound to the ptxas that produced it
-        # (a mismatched ptxas rejects it), so scope it by ptxas version -- one kernel keeps a distinct
-        # tuned ACF per ptxas, so ACFs from different ptxas versions coexist instead
-        # of overwriting each other. The triton-core consumer (magnon.store.acf_path) reads the same
-        # version-tagged path using ITS ptxas version; the kernel identity (ir_hash) stays version-free.
+        # Group artifacts under <arch>/<ir_hash[:16]>/, retaining version-tagged filenames. An ACF is
+        # bound to its ptxas version, so different toolchains must coexist without overwriting one
+        # another; the kernel identity stays version-free. Direct consumers must use this layout.
         store_path = LocalStore(args.output or default_store_root()).write(
             target.name,
             arch,
@@ -313,11 +349,11 @@ def _cmd_tune(args) -> int:
             print("Manifold upload skipped: no ACF admitted.")
         else:
             try:
-                uploaded = task_mod.upload_acf(args.task_source, store_path)
+                uploaded = task_mod.upload_store(args.task_source, args.output or default_store_root(), store_path)
             except task_mod.TaskError as e:
                 sys.stderr.write(f"[upload-manifold] {e}\nLocal ACF retained at {store_path}\n")
                 return 1
-            print(f"uploaded ACF and provenance -> {uploaded}")
+            print(f"uploaded task store -> {uploaded}")
     return 0
 
 
@@ -326,20 +362,61 @@ def _cmd_doctor() -> int:
     return 0
 
 
+def _cmd_tune_list(args) -> int:
+    print(f"Discovering tasks under {args.task_list} ...", flush=True)
+    try:
+        sources = task_mod.manifold_tasks(args.task_list)
+        if args.upload_manifold:
+            # Validate every upload destination before starting any search.
+            for source in sources:
+                task_mod.manifold_store_url(source)
+    except task_mod.TaskError as e:
+        sys.stderr.write(f"[task-list] {e}\n")
+        return 1
+
+    # The tuning parser's destinations match its long option names (underscores become hyphens).
+    # Forward every tuning option to each child, including pins and the shared local store root.
+    options = []
+    for name, value in vars(args).items():
+        if name in ("task", "task_list") or value is None or value is False:
+            continue
+        flag = "--" + name.replace("_", "-")
+        options.extend([flag] if value is True else [f"{flag}={value}"])
+
+    failed = 0
+    print(f"Found {len(sources)} tasks; tuning sequentially.", flush=True)
+    for index, source in enumerate(sources, 1):
+        print(f"\n[task-list {index}/{len(sources)}] {source}", flush=True)
+        # A fresh process releases CUDA contexts and tensor caches between tasks. Within each
+        # search, --full-tune / --workers still control parallel candidate scoring across GPUs.
+        try:
+            result = subprocess.run([*_harness_cmd(), "--task", source, *options], check=False)
+            code = result.returncode
+        except OSError as e:
+            sys.stderr.write(f"[task-list] {source}: {e}\n")
+            code = 1
+        if code != 0:
+            failed += 1
+            sys.stderr.write(f"[task-list] FAILED (exit {code}): {source}\n")
+    print(f"Task-list complete: {len(sources) - failed} completed, {failed} failed, {len(sources)} total.", flush=True)
+    return 1 if failed else 0
+
+
 # Subcommands are intercepted in main() before the parser sees them, so argparse cannot
 # advertise them on its own -- spell the real surface out here. `_score` stays undocumented: it is
 # the internal per-candidate scorer the adapter calls back into, not a user command.
 _USAGE = (
     "ptx_anneal --task <dir> [--output <store>] [options]\n"
+    "       ptx_anneal --task-list <manifold_dir> [--output <store>] [options]\n"
     "       ptx_anneal replay --task <dir> [options]\n"
     "       ptx_anneal doctor"
 )
 
 _EPILOG = """\
-knobs with no flag (environment only):
+environment settings:
   PTX_ANNEAL_FORCE_ADMIT   admit the best valid candidate even when it did not beat the baseline
                            (smoke knob: guarantees a real ACF lands so consume can be exercised)
-  CIQ_POOL / CIQ_GENERATIONS         engine budget (default 8 / 1 -- one batch, no evolution)
+  CIQ_POOL / CIQ_CULL / CIQ_GENERATIONS   engine budget (default 8 / 4 / 1 -- one batch, no evolution)
   CIQ_SS_TAG / CIQ_SS_VERSION / CIQ_SS_VARIANT   pin the published search-space catalog
   CIQ_SEARCH_SPACES_DIR    offline search-space mirror (no network)
 
@@ -354,6 +431,13 @@ notes:
 """
 
 
+def _positive_int(value: str) -> int:
+    result = int(value)
+    if result < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ptx_anneal",
@@ -365,15 +449,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     g = p.add_argument_group("task")
-    # Required here rather than checked later: it always was mandatory, and a late SystemExit is a
-    # worse error than argparse's usage message.
-    g.add_argument("--task", required=True, help="local task directory or manifold:// task directory URL")
-    g.add_argument("--output", "--store", dest="output", help="ACF store root (default: ~/.ptx_anneal/store)")
+    source = g.add_mutually_exclusive_group(required=True)
+    source.add_argument("--task", help="local task directory or manifold:// task directory URL")
+    source.add_argument(
+        "--task-list",
+        help="Manifold directory URL; recursively discover and tune all tasks sequentially, continuing after failures",
+    )
+    g.add_argument(
+        "--output",
+        "--store",
+        dest="output",
+        help="ACF store root (default: $COMPILE_IQ_STORE or ~/.compile_iq/store)",
+    )
     g.add_argument(
         "--upload-manifold",
         action="store_true",
-        help="upload the admitted ACF and provenance to the task's compileiq_YYYYmmddHHMMSS directory (UTC); "
-        "requires --task manifold://...",
+        help="upload the task's <arch>/<hash16>/ store subtree to manifold://<bucket>/<run>/store; "
+        "requires each task URL to have the form manifold://<bucket>/<run>/tasks/<task-id>",
+    )
+
+    g = p.add_argument_group("search")
+    g.add_argument(
+        "--full-tune",
+        action="store_true",
+        help="set 20 generations, pool size 32, and cull size 24, and use all CUDA-visible GPUs "
+        "unless --workers is set; overrides CIQ_GENERATIONS, CIQ_POOL, CIQ_CULL, and PTX_ANNEAL_NUM_WORKERS",
     )
 
     g = p.add_argument_group("scoring")
@@ -386,6 +486,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     g.add_argument("--warmup", type=int, default=25, help="benchmark warmup iters (default: %(default)s)")
     g.add_argument("--rep", type=int, default=50, help="benchmark measured iters (default: %(default)s)")
+    g.add_argument(
+        "--workers",
+        type=_positive_int,
+        help="CompileIQ native workers (default: all visible GPUs with --full-tune, otherwise "
+        "$PTX_ANNEAL_NUM_WORKERS or 1); uses the first N GPUs, one candidate per GPU; "
+        "requires CUDA_VISIBLE_DEVICES unless --full-tune probes the device list",
+    )
     g.add_argument("--target", default="ptx", help="target (default: %(default)s)")
 
     g = p.add_argument_group("provisioning pins", "all optional -- each of these self-provisions")
@@ -445,8 +552,17 @@ def main(argv=None) -> int:
     else:
         parser = build_parser()
         args, command = parser.parse_args(argv), _cmd_tune
-        if args.upload_manifold and not args.task.startswith("manifold://"):
-            parser.error("--upload-manifold requires --task manifold://<bucket>/<task directory>")
+        if args.task_list is not None:
+            if not args.task_list.startswith("manifold://"):
+                parser.error("--task-list requires a manifold:// directory URL")
+            return _cmd_tune_list(args)
+        if args.upload_manifold:
+            if not args.task.startswith("manifold://"):
+                parser.error("--upload-manifold requires --task manifold://<bucket>/<run>/tasks/<task-id>")
+            try:
+                task_mod.manifold_store_url(args.task)
+            except task_mod.TaskError as e:
+                parser.error(str(e))
     args.task_source = args.task
     try:
         # Fetch once per invocation. The engine and its scorers share the same local files until
