@@ -51,7 +51,6 @@ def _run(x: torch.Tensor) -> torch.Tensor:
     grid = (x.numel() // _BLOCK,)
     # @triton.jit rewrites the launch signature: BLOCK/ITERS/NACC are constexpr and num_warps is a
     # launch meta-param, neither of which pyre models.
-    # pyre-ignore[6, 28]
     _synth_acf_kernel[grid](x, y, BLOCK=_BLOCK, ITERS=_ITERS, NACC=_NACC, num_warps=4)
     return y
 

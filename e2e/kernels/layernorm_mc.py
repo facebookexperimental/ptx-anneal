@@ -20,7 +20,6 @@ import torch
 from ..registry import KernelSpec, register
 from . import pin_autotuner
 
-# pyre-ignore[21]: dashed tlx tutorial module, resolvable only by name.
 _tut = importlib.import_module("triton.language.extra.tlx.tutorials.blackwell-multi-cta-layernorm_test")
 
 _M, _N = 4096, 1024
