@@ -94,7 +94,11 @@ PTX in, ACF out
   return nonzero if any failed. Each child owns its task download, CUDA context, search and upload.
 - `ptx_anneal/replay.py` — standalone `replay --task`: assemble and benchmark PTX without an
   engine or ACF. Uses lazy torch allocation and Triton TMA encoding with the CUDA driver;
-  supports BF16, strides and CTA clusters. Inputs are synthetic; this is not a correctness check.
+  supports BF16, strides and CTA clusters. Not a correctness check.
+- Captured inputs: a spec tensor's optional `pickle_sha256` names `<task_dir>/<sha>.pkl`. `alloc_tensors`
+  loads it when present (restricted unpickler — never plain `pickle.load` on a downloaded task) and
+  synthesizes otherwise; `scoring` routes such tasks to the torch scorer, since the numpy worker cannot
+  read torch pickles. Manifold downloads fetch them best-effort.
 - `ptx_anneal/fingerprint.py` — the search-problem fingerprint both channels emit (stdlib only).
 - `e2e/` — the adhoc validation harness (`e2e.sh`, `kernels/`); never packaged.
   `MODE=tune` needs only the factory's deps; `kernels/` + `run.py` need torch+triton.

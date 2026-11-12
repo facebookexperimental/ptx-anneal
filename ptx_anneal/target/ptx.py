@@ -115,7 +115,7 @@ class PtxTarget(base.Target):
             cubin = L.ptxas_compile(ptx, ptxas, arch=spec["arch"], acf_path=acf)
             k = L.load_cubin(cubin, spec["entry"], spec["shared"], cluster=spec.get("cluster"))
             try:
-                tensors = L.alloc_tensors(spec, seed=0)
+                tensors = L.alloc_tensors(spec, seed=0, task_dir=task.dir)
                 tms, addrs = L.build_tensormaps(spec, tensors)  # [] for non-TMA kernels
                 scratch = L.alloc_global_scratch(spec)  # None unless the kernel uses global scratch
                 ka = L.kernel_args_from_spec(spec, tensors, addrs, scratch)

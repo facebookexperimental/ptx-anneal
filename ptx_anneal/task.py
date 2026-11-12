@@ -5,10 +5,11 @@
 
 A *task* is the unit of work a frontend (e.g. fbtriton's collection hook) hands to
 the factory. It is **source-free** — the factory never recompiles from Python — and
-lives in a directory containing exactly two files:
+lives in a directory containing two required files:
 
     <task_dir>/kernel.ptx   the fixed IR the artifact is tuned for
     <task_dir>/spec.json    the launch description defined by this module
+    <task_dir>/<sha256>.pkl optional captured input values, one per tensor that names it
 
 ``spec.json`` schema (v1)::
 
@@ -20,7 +21,7 @@ lives in a directory containing exactly two files:
       "block":  [128, 1, 1],             # CTA dims (threads)
       "grid":   [8, 1, 1],               # launch grid (CTAs)
       "ptxas":  "",                      # ptxas path (filled at run; never hardcode)
-      "tensors": [{"shape", "dtype", "strides"}, ...],
+      "tensors": [{"shape", "dtype", "strides", "pickle_sha256"?}, ...],
       "args":    [{"t": i} | {"i32"|"i64"|"f32": v} | {"tma": j} | {"global_scratch": true}
                   | {"null": true}, ...],
       "tensordescs": [...],              # optional; host-TMA descriptors
@@ -36,6 +37,10 @@ kernel-param order (post constexpr / ``equal_to_1`` specialization), including t
 trailing scratch params: ``global_scratch`` (null, or ``{"global_scratch": true}`` for a
 ``grid_size * global_scratch.size`` byte buffer) then ``profile_scratch`` (always null).
 
+A tensor's optional ``"pickle_sha256"`` names ``<task_dir>/<pickle_sha256>.pkl``, a pickled CPU
+``torch.Tensor`` holding the captured input. Scorers load it when the file exists and synthesize
+deterministic values otherwise, so a task is complete without any pickle.
+
 The loader accepts specs that omit ``spec_version`` (treated as v1) so tasks already
 collected by older frontends keep working.
 """
@@ -44,8 +49,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -60,6 +67,9 @@ TASK_DIR_ENV = "COMPILE_IQ_TASK_DIR"
 
 # Fields every v1 spec must carry to describe a launch.
 REQUIRED_FIELDS = ("entry", "arch", "shared", "block", "grid", "tensors", "args")
+
+# Captured-input pickles are named by their content hash; anything else must not reach a path.
+_PICKLE_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class TaskError(ValueError):
@@ -109,7 +119,37 @@ def local_task_dir(task_dir: str | os.PathLike[str]) -> Iterator[str]:
             if result.returncode != 0 or not os.path.isfile(dest):
                 detail = result.stderr.strip() or result.stdout.strip() or "download did not create the requested file"
                 raise TaskError(f"failed to download manifold://{remote} (exit {result.returncode}): {detail}")
+        _download_pickled_inputs(manifold, source, local_dir)
         yield local_dir
+
+
+def _download_pickled_inputs(manifold: str, source: str, local_dir: str) -> None:
+    """Fetch the captured-input pickles spec.json names. They are optional: a tensor whose pickle
+    cannot be fetched is synthesized, exactly as for a local task without it."""
+    try:
+        with open(os.path.join(local_dir, "spec.json")) as f:
+            tensors = json.load(f).get("tensors")
+    except (OSError, ValueError, AttributeError):
+        return  # load() reports a malformed spec; there is nothing to fetch for it here
+    for tensor in tensors if isinstance(tensors, list) else []:
+        digest = tensor.get("pickle_sha256") if isinstance(tensor, dict) else None
+        if not isinstance(digest, str) or not _PICKLE_SHA256.fullmatch(digest):
+            continue
+        remote = f"{source}/{digest}.pkl"
+        dest = os.path.join(local_dir, f"{digest}.pkl")
+        if os.path.isfile(dest):
+            continue  # several tensors may share one captured value
+        try:
+            result = subprocess.run(
+                [manifold, "get", remote, dest], capture_output=True, text=True, timeout=600, check=False
+            )
+            failed = result.returncode != 0
+        except (OSError, subprocess.SubprocessError):
+            failed = True
+        if failed or not os.path.isfile(dest):
+            if os.path.exists(dest):
+                os.remove(dest)  # never leave a partial pickle for the scorer to load
+            sys.stderr.write(f"[task] no captured input manifold://{remote}; synthesizing it\n")
 
 
 def manifold_store_url(task_dir: str) -> str:
@@ -222,6 +262,15 @@ def default_task_root() -> str:
 def spec_ir_hash(spec: dict) -> str | None:
     """The content key from a spec, accepting the legacy ``ptx_sha256`` alias."""
     return spec.get("ir_hash") or spec.get("ptx_sha256")
+
+
+def pickled_input_path(task_dir: str, tensor: dict) -> str | None:
+    """The captured-input pickle for one spec tensor, or None when the tensor must be synthesized."""
+    digest = tensor.get("pickle_sha256")
+    if not isinstance(digest, str) or not _PICKLE_SHA256.fullmatch(digest):
+        return None
+    path = os.path.join(task_dir, f"{digest}.pkl")
+    return path if os.path.isfile(path) else None
 
 
 def validate_spec(spec: dict) -> None:

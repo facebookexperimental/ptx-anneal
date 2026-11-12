@@ -3,6 +3,8 @@
 # LICENSE file in the root directory of this source tree.
 """Standalone replay and clustered driver launch coverage, with CPU-only stubs."""
 
+import json
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +33,22 @@ def test_replay_cli_skips_engine_and_overrides_captured_ptxas(monkeypatch, capsy
     assert cli.main(["replay", "--task", SAMPLE_TASK, "--ptxas", "/explicit/ptxas"]) == 0
     assert run.call_args.args[1] == "/explicit/ptxas"
     assert "MS 0.25" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("captured, expected", [(False, "inputs=synthetic"), (True, "inputs=captured 1/3")])
+def test_replay_cli_reports_captured_inputs(monkeypatch, capsys, tmp_path, captured, expected):
+    task_dir = tmp_path / "task"
+    shutil.copytree(SAMPLE_TASK, task_dir)
+    spec = json.loads((task_dir / "spec.json").read_text())
+    spec["tensors"][0]["pickle_sha256"] = digest = "a" * 64
+    spec["tensors"][1]["pickle_sha256"] = "b" * 64  # named but absent: synthesized
+    (task_dir / "spec.json").write_text(json.dumps(spec))
+    if captured:
+        (task_dir / f"{digest}.pkl").write_bytes(b"")
+    monkeypatch.setattr(replay, "replay", Mock(return_value=0.25))
+    monkeypatch.setattr(cli.provision, "ptxas_version", lambda p: "13.3")
+    assert cli.main(["replay", "--task", str(task_dir), "--ptxas", "/ptxas"]) == 0
+    assert expected in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("version", [None, "13.2"])
@@ -74,7 +92,8 @@ def test_replay_launches_spec_without_acf(monkeypatch, bench):
     load = Mock(return_value=kernel)
     monkeypatch.setattr(L, "ptxas_compile", compile_ptx)
     monkeypatch.setattr(L, "load_cubin", load)
-    monkeypatch.setattr(L, "alloc_tensors", Mock(return_value=tensors))
+    alloc = Mock(return_value=tensors)
+    monkeypatch.setattr(L, "alloc_tensors", alloc)
     maps = Mock(return_value=(descriptors, addresses))
     monkeypatch.setattr(L, "build_tensormaps", maps)
     scratch = object()
@@ -93,6 +112,7 @@ def test_replay_launches_spec_without_acf(monkeypatch, bench):
     assert replay.replay(task, "/ptxas", warmup=2, rep=20, bench=bench) == 0.125
     compile_ptx.assert_called_once_with("PTX", "/ptxas", arch="sm_100a")
     load.assert_called_once_with(b"cubin", "k", 100, cluster=[2, 1, 1])
+    alloc.assert_called_once_with(spec, seed=0, task_dir="/task")
     maps.assert_called_once_with(spec, tensors)
     alloc_scratch.assert_called_once_with(spec)
     make_args.assert_called_once_with(spec, tensors, addresses, scratch)

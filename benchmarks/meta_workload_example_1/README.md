@@ -125,8 +125,8 @@ inside each `spec.json` points at the capture machine.
   and the collector wrote `kernel.ptx` in place. Raw PTX differs in length per rank (debug info paths), so a shorter
   write left the tail of a longer one behind. They are kept as-is for completeness; delete the trailing junk after
   `.section .debug_macinfo { }` to use them.
-- **No captured inputs:** the collector's `*.pkl` input captures were removed. `ptx_anneal` never reads them, since it
-  benchmarks with seeded random inputs.
+- **No captured inputs:** the collector's `*.pkl` input captures were removed. The specs still name them via
+  `pickle_sha256`, so `ptx_anneal` falls back to seeded random inputs; the results below were measured that way.
 
 ## All tasks
 

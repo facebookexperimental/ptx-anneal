@@ -97,6 +97,48 @@ def test_remote_task_download_and_cleanup(manifold_download, suffix):
     assert not Path(local_dir).exists()
 
 
+def test_pickled_input_path(tmp_path):
+    digest = "d" * 64
+    (tmp_path / f"{digest}.pkl").write_bytes(b"")
+    assert task.pickled_input_path(str(tmp_path), {"pickle_sha256": digest}) == str(tmp_path / f"{digest}.pkl")
+    assert task.pickled_input_path(str(tmp_path), {"pickle_sha256": "e" * 64}) is None  # absent: synthesize
+    assert task.pickled_input_path(str(tmp_path), {}) is None
+    (tmp_path / "x.pkl").write_bytes(b"")
+    for bad in ("x", "../" + digest, digest.upper(), 7):
+        assert task.pickled_input_path(str(tmp_path), {"pickle_sha256": bad}) is None
+
+
+def test_remote_task_downloads_captured_inputs(monkeypatch, tmp_path, capsys):
+    present, missing = "1" * 64, "2" * 64
+    spec = _spec()
+    spec["tensors"][0]["pickle_sha256"] = present
+    spec["tensors"][1]["pickle_sha256"] = missing
+    spec["tensors"][2]["pickle_sha256"] = present  # a shared capture is fetched once
+    remote = tmp_path / "remote"
+    shutil.copytree(SAMPLE_TASK, remote)
+    (remote / "spec.json").write_text(json.dumps(spec))
+    (remote / f"{present}.pkl").write_bytes(b"captured")
+    calls = []
+    monkeypatch.setattr(task.shutil, "which", lambda name: "/tools/manifold")
+
+    def download(argv, **kwargs):
+        calls.append(argv[2])
+        source = remote / Path(argv[2]).name
+        if not source.exists():
+            Path(argv[3]).write_bytes(b"partial")
+            return SimpleNamespace(returncode=1, stderr="not found", stdout="")
+        shutil.copyfile(source, argv[3])
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(task.subprocess, "run", download)
+    with task.local_task_dir("manifold://bucket/tree/task") as local_dir:
+        assert (Path(local_dir) / f"{present}.pkl").read_bytes() == b"captured"
+        assert not (Path(local_dir) / f"{missing}.pkl").exists()
+        assert task.load(local_dir).entry == "add_kernel"
+    assert [Path(c).name for c in calls] == ["spec.json", "kernel.ptx", f"{present}.pkl", f"{missing}.pkl"]
+    assert f"{missing}.pkl; synthesizing it" in capsys.readouterr().err
+
+
 def test_local_task_needs_no_manifold(monkeypatch):
     def unexpected_lookup(name):
         pytest.fail("local tasks must not look up a download tool")
