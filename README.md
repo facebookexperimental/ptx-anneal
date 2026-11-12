@@ -98,8 +98,9 @@ directory or a `manifold://` directory URL (file URLs such as `spec.json` are re
 ptx_anneal replay --task manifold://tc_bench_ci/tree/magnon/aba5e3348816add4
 ```
 
-Remote tasks require an authenticated `manifold` CLI on `PATH`. The two files are downloaded once
-to a temporary directory, which is removed when the run finishes, including on failure.
+Remote tasks require an authenticated `manifold` CLI on `PATH`. The two files, plus any captured
+input pickles the spec names, are downloaded once to a temporary directory, which is removed when
+the run finishes, including on failure.
 Local tasks do not need Manifold.
 
 Replay supports BF16, strided tensors, host TMA descriptors and
@@ -107,9 +108,12 @@ CTA clusters. Torch allocates tensors; Triton is used only to encode TMA descrip
 recompile the kernel. TMA tasks require a Triton version with the descriptor encoder used by
 the capture frontend (fbtriton for fbtriton captures).
 
-Inputs are deterministic synthetic tensors matching the captured shapes, dtypes and strides.
-Replay does not restore captured tensor values or check numerical correctness against original
-outputs. It prints `MS <milliseconds>` on success and exits nonzero on failure.
+A spec tensor may name a captured input with `"pickle_sha256"`. When `<task_dir>/<pickle_sha256>.pkl`
+exists, that tensor's values are loaded from it (a pickled CPU `torch.Tensor`, loaded with a restricted
+unpickler that admits only tensor globals); every other tensor is a deterministic synthetic tensor
+matching the captured shape, dtype and strides. Replay reports which it used (`inputs=captured 2/3`
+or `inputs=synthetic`). Tuning uses the same inputs for the baseline and every candidate. Replay does
+not check numerical correctness against original outputs. It prints `MS <milliseconds>` on success and exits nonzero on failure.
 
 Use `--bench do_bench` for L2-cold timing (default: `cudagraph`), and `--warmup` / `--rep` to set
 the timing budget. `--ptxas` pins the assembler; otherwise normal environment/PATH/wheel discovery

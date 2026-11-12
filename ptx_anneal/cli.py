@@ -186,7 +186,10 @@ def _cmd_replay(args) -> int:
     try:
         t = task_mod.load(args.task)
         ptxas, ver = _require_ptxas(args)
-        print(f"replay: {t.entry} ; arch={t.arch} ; ptxas={ptxas} (V{ver}) ; inputs=synthetic", flush=True)
+        tensors = t.spec["tensors"]
+        captured = sum(task_mod.pickled_input_path(t.dir, x) is not None for x in tensors)
+        inputs = f"captured {captured}/{len(tensors)}" if captured else "synthetic"
+        print(f"replay: {t.entry} ; arch={t.arch} ; ptxas={ptxas} (V{ver}) ; inputs={inputs}", flush=True)
         ms = replay(t, ptxas, warmup=args.warmup, rep=args.rep, bench=args.bench)
         if not math.isfinite(ms) or ms <= 0:
             raise RuntimeError(f"invalid replay timing: {ms}")
@@ -511,8 +514,9 @@ def _register_spill_parser() -> argparse.ArgumentParser:
 def _replay_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ptx_anneal replay",
-        description="Assemble and benchmark captured PTX without an engine or ACF. Uses synthetic inputs; "
-        "does not validate against original outputs. Requires the harness and cudapy extras.",
+        description="Assemble and benchmark captured PTX without an engine or ACF. Uses the task's captured "
+        "input pickles where present and synthetic inputs otherwise; does not validate against original "
+        "outputs. Requires the harness and cudapy extras.",
     )
     p.add_argument("--task", required=True, help="local task directory or manifold:// task directory URL")
     p.add_argument("--ptxas", help="ptxas >= 13.3 (otherwise use environment / PATH / installed nvcc wheel)")

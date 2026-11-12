@@ -3,11 +3,15 @@
 # LICENSE file in the root directory of this source tree.
 """Tests for the GPU-light bits of ptx_launch: auto-N math + kernelParams building (no GPU)."""
 
+import io
 import json
+import os
+import pickle
 from types import SimpleNamespace
 
 import pytest
 
+from ptx_anneal import ptx_launch as L
 from ptx_anneal.ptx_launch import _build_kernel_params, _pick_n, build_spec, build_spec_from_schema
 
 
@@ -206,3 +210,10 @@ def test_from_schema_tensordesc_not_supported():
     schema = _schema(args=[{"name": "d0", "type": "tensordesc<fp16>", "index": 0}])
     with pytest.raises(NotImplementedError):
         build_spec_from_schema(schema, _PTX, (4, 1, 1), td_args, "ptxas")
+
+
+def test_captured_input_unpickler_rejects_non_tensor_globals():
+    # A plain pickle.load would call os.system here; the captured-input loader must refuse it.
+    payload = pickle.dumps(os.system)
+    with pytest.raises(pickle.UnpicklingError, match="not a tensor"):
+        L._TensorUnpickler(io.BytesIO(payload)).load()

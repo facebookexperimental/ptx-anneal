@@ -3,8 +3,9 @@
 # LICENSE file in the root directory of this source tree.
 """Engine-free CLI scoring, selecting the tensor implementation from the captured spec.
 
-Ordinary contiguous tasks keep the cuda-python/numpy path. BF16, TMA and strided tensors use
-the torch-based PTX target, which validates candidates against untuned output before timing.
+Ordinary contiguous tasks keep the cuda-python/numpy path. BF16, TMA, strided tensors and captured
+input pickles use the torch-based PTX target, which validates candidates against untuned output
+before timing.
 GPU dependencies are imported only after selecting a scorer.
 """
 
@@ -13,9 +14,11 @@ from . import task as task_mod
 _NUMPY_DTYPES = {"float32", "float16", "int32", "int64", "int8"}
 
 
-def needs_torch(spec: dict) -> bool:
+def needs_torch(spec: dict, task_dir: str | None = None) -> bool:
     if spec.get("tensordescs") or any("tma" in arg for arg in spec["args"]):
         return True
+    if task_dir is not None and any(task_mod.pickled_input_path(task_dir, t) for t in spec["tensors"]):
+        return True  # captured inputs are torch pickles; the numpy worker can only synthesize
     for tensor in spec["tensors"]:
         if tensor["dtype"] not in _NUMPY_DTYPES:
             return True
@@ -34,7 +37,7 @@ def needs_torch(spec: dict) -> bool:
 
 def score(task_dir, acf_path, warmup, rep, bench="cudagraph", *, ptxas=None):
     task = task_mod.load(task_dir)
-    if needs_torch(task.spec):
+    if needs_torch(task.spec, task.dir):
         from .target.ptx import PtxTarget
 
         return PtxTarget().score_one(task, acf_path, warmup=warmup, rep=rep, bench=bench, ptxas=ptxas)

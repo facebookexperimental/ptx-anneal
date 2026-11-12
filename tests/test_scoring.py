@@ -45,6 +45,15 @@ def test_tensor_scorer_selection(tensor, torch_needed):
     assert scoring.needs_torch(_spec(**tensor)) is torch_needed
 
 
+def test_captured_input_uses_torch_even_for_float32(tmp_path):
+    digest = "c" * 64
+    spec = _spec(pickle_sha256=digest)
+    assert not scoring.needs_torch(spec, str(tmp_path))  # named but absent: the numpy worker synthesizes
+    (tmp_path / f"{digest}.pkl").write_bytes(b"")
+    assert scoring.needs_torch(spec, str(tmp_path))
+    assert not scoring.needs_torch(spec)
+
+
 def test_tma_uses_torch_even_for_float32():
     spec = _spec()
     spec["args"] = [{"tma": 0}]
@@ -148,8 +157,8 @@ def torch_launch(monkeypatch):
         state.kernels.append(kernel)
         return kernel
 
-    def alloc(spec, seed):
-        assert seed == 0
+    def alloc(spec, seed, task_dir):
+        assert seed == 0 and task_dir == "/task"
         tensors = [Tensor([0.0, 0.0])]
         state.kernels[-1].tensors = tensors
         return tensors

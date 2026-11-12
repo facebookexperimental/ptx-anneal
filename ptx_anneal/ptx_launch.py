@@ -19,11 +19,16 @@ authoritative for the count/types; callers build `kernel_args` to match and we a
 the PTX before launching.
 """
 
+import collections
 import ctypes
+import io
 import math
+import pickle
 import re
 import subprocess
 import tempfile
+
+from .task import pickled_input_path
 
 # cuda-python is needed only to LAUNCH (driver API). Import lazily so the pure helpers
 # (parse_entry / build_spec / ptxas_compile) can be used from a dependency-light context
@@ -702,8 +707,46 @@ def bench_ms_do_bench(
 # constexpr specialization) including the two trailing null scratch params; {"t":i} is a pointer to
 # tensors[i].
 # --------------------------------------------------------------------------------------
-def alloc_tensors(spec, device="cuda", seed=0):
-    """Allocate the spec's tensors (deterministic, so baseline and ACF runs see identical inputs)."""
+class _TensorUnpickler(pickle.Unpickler):
+    """Admit only the globals a pickled CPU tensor references, so loading a downloaded task's
+    captured input cannot run arbitrary code the way a plain ``pickle.load`` would."""
+
+    def find_class(self, module, name):
+        if (module, name) == ("collections", "OrderedDict"):
+            return collections.OrderedDict
+        if (module, name) == ("torch._utils", "_rebuild_tensor_v2"):
+            import torch
+
+            return torch._utils._rebuild_tensor_v2
+        if (module, name) == ("torch.storage", "_load_from_bytes"):
+            import torch
+
+            # torch's own helper is torch.load(weights_only=False); restrict the storage payload too.
+            return lambda b: torch.load(io.BytesIO(b), weights_only=True, map_location="cpu")
+        raise pickle.UnpicklingError(f"captured input references {module}.{name}, which is not a tensor")
+
+
+def load_pickled_tensor(path, tensor_spec):
+    """Load a captured-input pickle, checking it holds a tensor of the spec's shape and dtype."""
+    import torch
+
+    with open(path, "rb") as f:
+        x = _TensorUnpickler(f).load()
+    if not isinstance(x, torch.Tensor):
+        raise TypeError(f"captured input {path} holds {type(x).__name__}, not a tensor")
+    if list(x.shape) != list(tensor_spec["shape"]) or x.dtype != getattr(torch, tensor_spec["dtype"]):
+        raise ValueError(
+            f"captured input {path} is {x.dtype}{list(x.shape)}, "
+            f"but the spec tensor is {tensor_spec['dtype']}{tensor_spec['shape']}"
+        )
+    return x
+
+
+def alloc_tensors(spec, device="cuda", seed=0, task_dir=None):
+    """Allocate the spec's tensors (deterministic, so baseline and ACF runs see identical inputs).
+
+    With ``task_dir``, a tensor whose captured ``<pickle_sha256>.pkl`` exists there takes its values
+    from that pickle; every other tensor is synthesized."""
     import torch
 
     torch.manual_seed(seed)
@@ -715,12 +758,25 @@ def alloc_tensors(spec, device="cuda", seed=0):
         "int32": torch.int32,
         "int64": torch.int64,
         "int8": torch.int8,
+        "uint8": torch.uint8,
+        "bool": torch.bool,
+        "float8_e4m3fn": torch.float8_e4m3fn,
     }
     out = []
     for t in spec["tensors"]:
         dt = dts[t["dtype"]]
         x = torch.empty_strided(t["shape"], t["strides"], dtype=dt, device=device)
-        x.normal_() if dt.is_floating_point else x.zero_()
+        # Synthesize first even for a captured tensor: it keeps the RNG stream independent of which
+        # pickles exist, and fills strided padding that a captured (compacted) view does not cover.
+        if dt == torch.float8_e4m3fn:  # normal_ has no fp8 kernel; draw in fp32 and round
+            x.copy_(torch.randn(t["shape"], device=device))
+        elif dt.is_floating_point:
+            x.normal_()
+        else:
+            x.zero_()
+        path = pickled_input_path(task_dir, t) if task_dir else None
+        if path:
+            x.copy_(load_pickled_tensor(path, t))
         out.append(x)
     return out
 
@@ -732,13 +788,14 @@ def build_tensormaps(spec, tensors):
     tds = spec.get("tensordescs")
     if not tds:
         return [], []
-    import triton
+    # Import the submodule explicitly: `import triton` alone does not guarantee `triton.runtime` is bound.
+    from triton.runtime import driver
 
     try:
         from triton.backends.nvidia.driver import TMA_DTYPE_DEVICE_TO_HOST as _D2H
     except Exception:  # noqa: BLE001 - private triton API; absent OR moved OR renamed across
         _D2H = {i: i for i in range(16)}  # versions, so fall back to identity rather than break.
-    fill = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled
+    fill = driver.active.utils.fill_tma_descriptor_tiled
     objs, addrs = [], []
     for td in tds:
         base = tensors[td["base"]]

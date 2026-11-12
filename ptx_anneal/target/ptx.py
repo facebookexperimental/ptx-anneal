@@ -115,7 +115,7 @@ class PtxTarget(base.Target):
             cubin = L.ptxas_compile(ptx, ptxas, arch=spec["arch"], acf_path=acf)
             k = L.load_cubin(cubin, spec["entry"], spec["shared"], cluster=spec.get("cluster"))
             try:
-                tensors = L.alloc_tensors(spec, seed=0)
+                tensors = L.alloc_tensors(spec, seed=0, task_dir=task.dir)
                 tms, addrs = L.build_tensormaps(spec, tensors)  # [] for non-TMA kernels
                 ka = L.kernel_args_from_spec(spec, tensors, addrs)
                 torch.cuda.synchronize()  # finish input initialization before the driver launch
