@@ -73,3 +73,48 @@ def test_load_validator_bad_import_path(monkeypatch):
     monkeypatch.setenv(VALIDATOR_ENV, "ptx_anneal.validate:DoesNotExist")
     with pytest.raises(RuntimeError):
         load_validator()
+
+
+# --- per-buffer relative deviation (torch scorer + numpy worker); optional deps, skipped in CI ---
+def _torch_deviation():
+    torch = pytest.importorskip("torch")
+    from ptx_anneal.target.ptx import relative_deviation
+
+    return torch.tensor, relative_deviation
+
+
+def _numpy_deviation():
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("cuda.bindings")
+    from ptx_anneal.run.cudapy_worker import relative_deviation
+
+    return np.array, relative_deviation
+
+
+@pytest.mark.parametrize("make", [_torch_deviation, _numpy_deviation])
+def test_deviation_ignores_matching_nonfinite(make):
+    arr, dev = make()
+    nan, inf = float("nan"), float("inf")
+    ref = arr([1.0, nan, inf, -inf, 4.0])
+    assert dev(ref, ref) == 0.0  # a NaN-producing baseline must accept itself
+    assert dev(ref, arr([1.0, nan, inf, -inf, 4.2])) == pytest.approx(0.05)
+
+
+_NAN, _INF = float("nan"), float("inf")
+
+
+@pytest.mark.parametrize("make", [_torch_deviation, _numpy_deviation])
+@pytest.mark.parametrize("cur", [[1.0, 2.0, 3.0], [1.0, _NAN, _INF], [_NAN, 2.0, -_INF]])
+def test_deviation_rejects_changed_nonfinite_pattern(make, cur):
+    arr, dev = make()
+    ref = arr([1.0, float("nan"), float("-inf")])
+    assert dev(ref, arr(cur)) == float("inf")
+    with pytest.raises(ValidationError):
+        RelTolValidator().check([dev(ref, arr(cur))])
+
+
+@pytest.mark.parametrize("make", [_torch_deviation, _numpy_deviation])
+def test_deviation_all_nonfinite_buffer(make):
+    arr, dev = make()
+    ref = arr([float("nan"), float("inf")])
+    assert dev(ref, ref) == 0.0

@@ -3,6 +3,7 @@
 # LICENSE file in the root directory of this source tree.
 """CLI scorer selection and torch candidate validation using CPU-only substitutes."""
 
+import math
 import sys
 import weakref
 from types import SimpleNamespace
@@ -130,12 +131,36 @@ class Tensor:
     def __sub__(self, other):
         return Tensor([a - b for a, b in zip(self.values, other.values, strict=True)])
 
+    def any(self):
+        return any(self.values)
+
+    def __getitem__(self, mask):
+        return Tensor([v for v, keep in zip(self.values, mask.values, strict=True) if keep])
+
+
+def _elementwise(pred):
+    return lambda t: Tensor([pred(v) for v in t.values])
+
+
+# The torch functions the NaN-aware relative deviation uses, over the list-backed Tensor above.
+_TORCH_VALIDATION_OPS = {
+    "isnan": _elementwise(math.isnan),
+    "isposinf": _elementwise(lambda v: v == math.inf),
+    "isneginf": _elementwise(lambda v: v == -math.inf),
+    "isfinite": _elementwise(math.isfinite),
+    "equal": lambda a, b: a.values == b.values,
+}
+
 
 @pytest.fixture
 def torch_launch(monkeypatch):
-    state = SimpleNamespace(kernels=[], compiled=[], descriptors=[], events=[], measured=[], candidate=[2.0, 4.0])
+    state = SimpleNamespace(
+        kernels=[], compiled=[], descriptors=[], events=[], measured=[], baseline=[2.0, 4.0], candidate=[2.0, 4.0]
+    )
     monkeypatch.setitem(
-        sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(synchronize=lambda: state.events.append("sync")))
+        sys.modules,
+        "torch",
+        SimpleNamespace(cuda=SimpleNamespace(synchronize=lambda: state.events.append("sync")), **_TORCH_VALIDATION_OPS),
     )
     monkeypatch.delenv("PTX_ANNEAL_VALIDATOR", raising=False)
     monkeypatch.delenv("PTX_ANNEAL_REL_TOL", raising=False)
@@ -150,7 +175,7 @@ def torch_launch(monkeypatch):
 
         def launch(*args):
             assert state.events[-1] == "sync"
-            kernel.tensors[0].values = [2.0, 4.0] if cubin == "baseline" else state.candidate
+            kernel.tensors[0].values = state.baseline if cubin == "baseline" else state.candidate
             state.events.append("launch")
 
         kernel.launch = launch
@@ -203,3 +228,11 @@ def test_torch_scorer_rejects_incorrect_bf16_candidate(torch_launch, bad_output)
         PtxTarget().score_one(Task("/task", "PTX", spec), "/candidate.acf", ptxas="/pin")
     assert not torch_launch.measured
     assert all(k.unload.call_count == 1 for k in torch_launch.kernels)
+
+
+def test_torch_scorer_accepts_nan_baseline_with_matching_candidate(torch_launch):
+    # A kernel that writes NaN on synthetic inputs must still validate against itself.
+    torch_launch.baseline = [float("nan"), 4.0]
+    torch_launch.candidate = [float("nan"), 4.0]
+    spec = {**_spec(dtype="bfloat16"), "cluster": [2, 1, 1]}
+    assert PtxTarget().score_one(Task("/task", "PTX", spec), "/candidate.acf", ptxas="/pin") == 0.125

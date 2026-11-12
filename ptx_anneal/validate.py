@@ -5,7 +5,8 @@
 
 An ACF only changes ptxas codegen, never the math, so a candidate must reproduce the no-ACF
 baseline. A worker computes, per output buffer, a relative deviation
-``max|cand - ref| / max(|ref|, eps)`` and hands the list to a :class:`Validator`, which decides
+``max|cand - ref| / max(|ref|, eps)`` over the buffer's finite elements (a buffer whose NaN/Inf
+pattern differs from the reference scores ``inf``) and hands the list to a :class:`Validator`, which decides
 whether the candidate is acceptable (raising :class:`ValidationError` if not). Working on the
 *deviations* (plain floats) rather than raw arrays keeps the validator framework-agnostic: the
 torch worker and the cuda-python/numpy worker feed the same interface.

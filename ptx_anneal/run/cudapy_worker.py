@@ -80,6 +80,20 @@ def _alloc_global_scratch(spec):
     return p, int(p) + (-int(p) % align)
 
 
+def relative_deviation(ref, cur) -> float:
+    """numpy twin of ``ptx_anneal.target.ptx.relative_deviation``: the non-finite pattern must match
+    exactly (else ``inf``), and the deviation is measured over the finite elements only."""
+    ref, cur = ref.astype(np.float64), cur.astype(np.float64)
+    for mask in (np.isnan, np.isposinf, np.isneginf):
+        if not np.array_equal(mask(ref), mask(cur)):
+            return float("inf")
+    finite = np.isfinite(ref)
+    if not finite.any():
+        return 0.0
+    ref, cur = ref[finite], cur[finite]
+    return float(np.abs(cur - ref).max()) / max(float(np.abs(ref).max()), 1e-9)
+
+
 def _launch_and_snapshot(ptx, spec, ptxas, acf_path, host_inputs):
     """ptxas(ptx[,acf]) -> cubin -> alloc+HtoD -> launch -> sync -> DtoH all buffers. Returns
     (loaded_kernel, kernel_args, device_ptrs, [np output arrays]). Caller frees device_ptrs."""
@@ -135,12 +149,8 @@ def score(task_dir, acf_path, warmup, rep, bench="cudagraph", *, ptxas=None):
     try:
         # 3) self-consistency: per-buffer relative deviation vs the no-ACF baseline, then let the
         #    pluggable validator accept/reject (an ACF only changes codegen, never the math).
-        deviations = []
-        for r, c in zip(ref, cur, strict=True):
-            if not np.issubdtype(r.dtype, np.floating):
-                continue
-            denom = max(float(np.abs(r).max()), 1e-9)
-            deviations.append(float(np.abs(c.astype(np.float64) - r.astype(np.float64)).max()) / denom)
+        floats = [(r, c) for r, c in zip(ref, cur, strict=True) if np.issubdtype(r.dtype, np.floating)]
+        deviations = [relative_deviation(r, c) for r, c in floats]
         load_validator().check(deviations)  # raises ValidationError -> scored INVALID by main()
         # 4) time the candidate. cudagraph (default) amortizes host launch overhead via graph replay --
         #    fast + deterministic, right for a smoke; do_bench flushes the L2 and takes the median of
