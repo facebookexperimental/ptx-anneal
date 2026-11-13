@@ -1,0 +1,122 @@
+{
+  "entry": "triton_red_fused__unsafe_view_clone_native_layer_norm_transpose_view_14",
+  "arch": "sm_100a",
+  "shared": 96,
+  "block": [
+    256,
+    1,
+    1
+  ],
+  "grid": [
+    512,
+    1,
+    1
+  ],
+  "ptxas": "",
+  "ptxas_version": "13.3",
+  "tensors": [
+    {
+      "shape": [
+        512,
+        1
+      ],
+      "dtype": "float32",
+      "strides": [
+        1,
+        1
+      ],
+      "pickle_sha256": "7e48a5879624102bd485fca0d9ce3cf7f5c79d2571df19d10ff2c721afc5c210"
+    },
+    {
+      "shape": [
+        256,
+        3535,
+        96
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        339360,
+        96,
+        1
+      ]
+    },
+    {
+      "shape": [
+        169680
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        1
+      ],
+      "pickle_sha256": "dcb99c9e7dac4d08635fa56e7566fe5c90d3066c3c328b63a9edeed63967b669"
+    },
+    {
+      "shape": [
+        169680
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        1
+      ],
+      "pickle_sha256": "e37f8ed868a4da90bc1129b19360c71fad6557471605168ee1d39af3423ebd6d"
+    },
+    {
+      "shape": [
+        512,
+        1
+      ],
+      "dtype": "float32",
+      "strides": [
+        1,
+        1
+      ],
+      "pickle_sha256": "784af2a1abf5ee4ee5c9d6dffdbe7adcb47c92a42f6554aa63a93f7fa4c945ed"
+    },
+    {
+      "shape": [
+        512,
+        169680
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        169728,
+        1
+      ]
+    }
+  ],
+  "args": [
+    {
+      "t": 0
+    },
+    {
+      "t": 1
+    },
+    {
+      "t": 2
+    },
+    {
+      "t": 3
+    },
+    {
+      "t": 4
+    },
+    {
+      "t": 5
+    },
+    {
+      "i32": 512
+    },
+    {
+      "i32": 169680
+    },
+    {
+      "null": true
+    },
+    {
+      "null": true
+    }
+  ],
+  "ptx_sha256": "c018fdd3865ba4a4b787829cd174b0e7590c452eca0ea16eb7d16824e5043b55",
+  "kernel_name": "triton_red_fused__unsafe_view_clone_native_layer_norm_transpose_view_14",
+  "fn_name": "triton_red_fused__unsafe_view_clone_native_layer_norm_transpose_view_14"
+}
