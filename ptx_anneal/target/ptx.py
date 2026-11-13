@@ -18,6 +18,7 @@ spawns::
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -74,6 +75,25 @@ def _resolve_ptxas(spec: dict) -> str:
     return ptxas
 
 
+def relative_deviation(ref, cur) -> float:
+    """``max|cur - ref| / max|ref|`` over the finite elements of one buffer (torch tensors).
+
+    A kernel may legitimately write NaN/Inf (e.g. on synthetic inputs). An ACF changes codegen, not
+    the math, so the non-finite pattern must match exactly; a mismatch returns ``inf``. Without this a
+    single NaN in the reference makes the deviation NaN and rejects even the baseline against itself."""
+    import torch
+
+    ref, cur = ref.float(), cur.float()
+    for mask in (torch.isnan, torch.isposinf, torch.isneginf):
+        if not torch.equal(mask(ref), mask(cur)):
+            return math.inf
+    finite = torch.isfinite(ref)
+    if not finite.any():
+        return 0.0
+    ref, cur = ref[finite], cur[finite]
+    return (cur - ref).abs().max().item() / max(ref.abs().max().item(), 1e-9)
+
+
 class PtxTarget(base.Target):
     """Tune ptxas ACFs for a fixed PTX kernel via the PTX-direct launch bridge."""
 
@@ -115,7 +135,7 @@ class PtxTarget(base.Target):
             cubin = L.ptxas_compile(ptx, ptxas, arch=spec["arch"], acf_path=acf)
             k = L.load_cubin(cubin, spec["entry"], spec["shared"], cluster=spec.get("cluster"))
             try:
-                tensors = L.alloc_tensors(spec, seed=0)
+                tensors = L.alloc_tensors(spec, seed=0, task_dir=task.dir)
                 tms, addrs = L.build_tensormaps(spec, tensors)  # [] for non-TMA kernels
                 scratch = L.alloc_global_scratch(spec)  # None unless the kernel uses global scratch
                 ka = L.kernel_args_from_spec(spec, tensors, addrs, scratch)
@@ -141,10 +161,7 @@ class PtxTarget(base.Target):
                 # so an extra clone of multi-GB buffers is unnecessary.
                 from ..validate import load_validator
 
-                deviations = []
-                for r, cur in zip(ref, tensors, strict=True):
-                    denom = max(r.float().abs().max().item(), 1e-9)
-                    deviations.append((cur.float() - r.float()).abs().max().item() / denom)
+                deviations = [relative_deviation(r, cur) for r, cur in zip(ref, tensors, strict=True)]
                 load_validator().check(deviations)
                 # 4) preserve the CLI's selected timing method. Keep `tms` alive through timing.
                 if bench == "do_bench":
