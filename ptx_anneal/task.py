@@ -259,6 +259,24 @@ def default_task_root() -> str:
     return os.environ.get(TASK_DIR_ENV, os.path.expanduser("~/.compile_iq/tasks"))
 
 
+def resolve_task_dir(task: str, root: str | None = None) -> str:
+    """Resolve ``--task``: a URL or an existing path is returned unchanged; any other relative name is
+    looked up under the task root (``$COMPILE_IQ_TASK_DIR`` or ``~/.compile_iq/tasks``). Task directories
+    are named by the 16-character ir_hash prefix, so a longer hex hash also matches its prefix."""
+    if "://" in task or os.path.exists(task) or os.path.isabs(task):
+        return task  # an absent absolute path is reported by load(), naming exactly what was asked for
+    root = root or default_task_root()
+    names = [task]
+    if re.fullmatch(r"[0-9a-f]{17,64}", task):
+        names.append(task[:16])
+    for name in names:
+        candidate = os.path.join(root, name)
+        if os.path.isdir(candidate):
+            return candidate
+    looked = " or ".join(os.path.join(root, name) for name in names)
+    raise TaskError(f"task not found: {task!r} is not a directory, nor is {looked} (task root: ${TASK_DIR_ENV})")
+
+
 def spec_ir_hash(spec: dict) -> str | None:
     """The content key from a spec, accepting the legacy ``ptx_sha256`` alias."""
     return spec.get("ir_hash") or spec.get("ptx_sha256")
