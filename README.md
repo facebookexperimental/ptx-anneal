@@ -149,6 +149,49 @@ matching the captured shape, dtype and strides. Replay reports which it used (`i
 or `inputs=synthetic`). Tuning uses the same inputs for the baseline and every candidate. Replay does
 not check numerical correctness against original outputs. It prints `MS <milliseconds>` on success and exits nonzero on failure.
 
+### Replay an ACF against the baseline
+
+`--acf` A/Bs one ACF file against the untuned PTX, still without an engine:
+
+```bash
+ptx_anneal replay --task /path/to/task --acf /path/to/kernel.acf [--bench do_bench]
+```
+
+Both cubins (untuned, and with `--apply-controls=<acf>`) run once on identical fresh inputs, and every
+tensor is compared before either is benchmarked, so in-place outputs remain comparable. This is
+the same self-referential oracle tuning uses: the reference is the untuned run, not the original
+outputs. The validator is the tuning one (`PTX_ANNEAL_VALIDATOR`, or `RelTolValidator` with
+`PTX_ANNEAL_REL_TOL`, default `1e-2`). Both kernels are then timed with the same `--bench` method:
+
+```
+numerics: PASS ; validator=RelTolValidator(rel_tol=0.01) ; max_rel_dev=0 ; oracle=untuned baseline
+  tensor[0] float32 [1024]: rel_dev=0
+  ...
+perf (cudagraph): baseline=0.001261 ms ; acf=0.0013 ms ; speedup=0.969x (-3.15%)
+BASELINE_MS 0.001260704868285358
+ACF_MS 0.0013004593756569811
+NUMERICS PASS
+```
+
+To replay the ACF that tuning stored for this task, use `--store` instead of `--acf`. It looks
+the ACF up by the same key tuning writes: the task PTX's `ir_hash`, its arch, and the ptxas version in use.
+The store root is `--store <root>`, or `$COMPILE_IQ_STORE` / `~/.compile_iq/store` when bare. It never
+falls back to an ACF from another ptxas version. On a miss, the error lists the versions the store does
+hold for the kernel.
+
+```bash
+ptx_anneal replay --task 13c9307b0f0d3eb1 --store ~/.compile_iq/store_nov13_capture
+```
+
+`--task` (for replay) also accepts a task name when no such directory exists. It is looked up under
+`$COMPILE_IQ_TASK_DIR` (default `~/.compile_iq/tasks`), and a full 64-character `ir_hash` also matches
+its 16-character directory. Existing paths, absolute paths and `manifold://` URLs are used as given.
+
+If the ACF has a `.acf.json` sidecar (store-written ACFs do), a warning is printed when its recorded
+`ir_hash` or `ptxas_version` differs from this task and ptxas. The exit code is 1 when numerics fail
+(the full report, including timings, is still printed) or when ptxas rejects the ACF. A slower ACF
+is a result, not a failure.
+
 Use `--bench do_bench` for L2-cold timing (default: `cudagraph`), and `--warmup` / `--rep` to set
 the timing budget. `--ptxas` pins the assembler; otherwise normal environment/PATH/wheel discovery
 applies. The captured spec's machine-specific `ptxas` path is ignored; the >= 13.3 floor still applies.

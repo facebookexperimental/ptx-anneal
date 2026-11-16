@@ -79,6 +79,12 @@ class LocalStore(Store):
         paths = self._read_paths(arch, ir_hash, toolchain_version)
         return next((p for p in paths if os.path.exists(p)), paths[0])
 
+    def find(self, target: str, arch: str, ir_hash: str, toolchain_version: str = "") -> str | None:
+        """Path of the stored ACF for this key (any supported layout), or ``None``. For consumers such
+        as ptxas that need a file rather than bytes; its sidecar is ``<path>.json``."""
+        path = self._read_path(arch, ir_hash, toolchain_version)
+        return path if os.path.exists(path) else None
+
     @staticmethod
     def _meta_at(acf_path: str) -> dict | None:
         try:

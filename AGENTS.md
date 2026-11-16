@@ -93,8 +93,14 @@ PTX in, ACF out
   in fresh harness subprocesses, forwarding all tuning options. Continue after failed tasks and
   return nonzero if any failed. Each child owns its task download, CUDA context, search and upload.
 - `ptx_anneal/replay.py` — standalone `replay --task`: assemble and benchmark PTX without an
-  engine or ACF. Uses lazy torch allocation and Triton TMA encoding with the CUDA driver;
-  supports BF16, strides and CTA clusters. Not a correctness check.
+  engine. Uses lazy torch allocation and Triton TMA encoding with the CUDA driver;
+  supports BF16, strides and CTA clusters. Not a correctness check against original outputs.
+  `--acf <file>` (`replay_acf`) A/Bs one ACF against the untuned PTX: compare every tensor after one
+  launch of each kernel (before benchmarking, so in-place kernels stay comparable) with the tuning
+  validator, then time both; exit 1 on a numerics failure. `--store [root]` instead picks the ACF
+  `LocalStore.find` returns for the task's `(arch, ir_hash)` at the *current* ptxas version (no
+  cross-version fallback). For replay only, `task.resolve_task_dir` maps a `--task` name that is not
+  an existing path (or a full ir_hash) to `$COMPILE_IQ_TASK_DIR/<name or hash16>`.
 - Captured inputs: a spec tensor's optional `pickle_sha256` names `<task_dir>/<sha>.pkl`. `alloc_tensors`
   loads it when present (restricted unpickler — never plain `pickle.load` on a downloaded task) and
   synthesizes otherwise; `scoring` routes such tasks to the torch scorer, since the numpy worker cannot
@@ -144,7 +150,7 @@ adapter — not the harness — must report its own identity.
 There are two orchestration paths; they share the torch-based PTX scorer where applicable:
 
 1. **`ptx_anneal --task` (the CLI, what ships).** Tuning is the default action —
-   there is no `tune` subcommand (`replay` benchmarks without tuning; `register_spill` tunes compiler
+   there is no `tune` subcommand (`replay` benchmarks without tuning, or A/Bs one ACF with `--acf`; `register_spill` tunes compiler
    spill statistics from a PTX file; `doctor` and `_score` also exist).
    `cli._cmd_tune` scores the baseline via `scoring.score`, spawns the engine adapter as a
    subprocess, and admits through `LocalStore`. The `_score` callback uses the same dispatch:

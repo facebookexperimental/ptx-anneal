@@ -30,7 +30,7 @@ The batch continues after individual failures, prints a final summary, and exits
 any task failed or no tasks were found. A completed task may have no admitted ACF.
 
 Exactly one of `--task` and `--task-list` is required. There is no `tune` subcommand — tuning is the
-default action (`replay` benchmarks without tuning; `doctor` and the internal `_score` also exist), and
+default action (`replay` benchmarks without tuning, or A/Bs an ACF with `--acf`; `doctor` and the internal `_score` also exist), and
 `--store` is an alias for `--output`. `ptx-anneal --help` lists both forms, the
 option groups, and the environment-only knobs.
 

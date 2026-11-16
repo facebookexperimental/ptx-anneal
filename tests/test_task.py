@@ -73,6 +73,23 @@ def test_default_task_root_env(monkeypatch):
     assert task.default_task_root().endswith("/.compile_iq/tasks")
 
 
+def test_resolve_task_dir_looks_up_names_under_task_root(tmp_path, monkeypatch):
+    root = tmp_path / "tasks"
+    (root / "0123456789abcdef").mkdir(parents=True)
+    monkeypatch.setenv(task.TASK_DIR_ENV, str(root))
+    monkeypatch.chdir(tmp_path)
+    assert task.resolve_task_dir("0123456789abcdef") == str(root / "0123456789abcdef")
+    # Task directories are named by the 16-character ir_hash prefix; a full hash finds its prefix.
+    assert task.resolve_task_dir("0123456789abcdef" + "0" * 48) == str(root / "0123456789abcdef")
+    # Existing paths, absolute paths and URLs are taken verbatim, never redirected to the root.
+    (tmp_path / "0123456789abcdef").mkdir()
+    assert task.resolve_task_dir("0123456789abcdef") == "0123456789abcdef"
+    assert task.resolve_task_dir("/no/such/task") == "/no/such/task"
+    assert task.resolve_task_dir("manifold://bucket/task") == "manifold://bucket/task"
+    with pytest.raises(task.TaskError, match="task not found.*COMPILE_IQ_TASK_DIR"):
+        task.resolve_task_dir("missing")
+
+
 @pytest.fixture
 def manifold_download(monkeypatch):
     calls = []

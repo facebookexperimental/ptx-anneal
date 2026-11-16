@@ -197,3 +197,12 @@ def test_default_store_root_env(monkeypatch):
     assert default_store_root() == "/tmp/ciq_store_xyz"
     monkeypatch.delenv("COMPILE_IQ_STORE", raising=False)
     assert default_store_root().endswith("/.compile_iq/store")
+
+
+def test_find_returns_existing_acf_path_or_none(tmp_path):
+    s = LocalStore(str(tmp_path))
+    h = "ab" * 32
+    assert s.find("ptx", "sm_100a", h, "13.3") is None
+    path = s.write("ptx", "sm_100a", h, b"acf", {}, toolchain_version="13.3")
+    assert s.find("ptx", "sm_100a", h, "13.3") == path
+    assert s.find("ptx", "sm_100a", h, "13.2") is None

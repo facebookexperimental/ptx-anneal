@@ -5,7 +5,7 @@
 
     ptx_anneal --task <task_dir> [--output <store>] [--ss <ss>]
     ptx_anneal --task-list <manifold_dir> [--full-tune] [--upload-manifold]
-    ptx_anneal replay --task <task_dir>
+    ptx_anneal replay --task <task_dir|name> [--acf <file.acf> | --store [root]]
     ptx_anneal register_spill --task <kernel.ptx> [--output <store>]
     ptx_anneal doctor
 
@@ -181,8 +181,59 @@ def _require_ptxas(args) -> tuple[str, str]:
     return ptxas, ver
 
 
+def _acf_provenance(acf: str, t, ver: str) -> list[str]:
+    """Warnings from the ACF's ``.acf.json`` sidecar, when it has one: an ACF is keyed to one PTX and
+    one ptxas, and applying it to anything else is legal but no longer measures what was tuned."""
+    try:
+        with open(acf + ".json") as f:
+            meta = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    warnings = []
+    if meta.get("ir_hash") and meta["ir_hash"] != t.ir_hash:
+        warnings.append(f"ACF was tuned for ir_hash {meta['ir_hash'][:16]}, not this task's {t.ir_hash[:16]}")
+    if meta.get("ptxas_version") and meta["ptxas_version"] != ver:
+        warnings.append(f"ACF was tuned with ptxas {meta['ptxas_version']}, replaying with {ver}")
+    return warnings
+
+
+def _print_acf_report(t, report, bench: str) -> None:
+    status = "PASS" if report.numerics_ok else "FAIL"
+    worst = max(report.deviations, default=0.0)
+    print(f"numerics: {status} ; validator={report.validator} ; max_rel_dev={worst:.3g} ; oracle=untuned baseline")
+    for i, (dev, x) in enumerate(zip(report.deviations, t.spec["tensors"], strict=True)):
+        print(f"  tensor[{i}] {x['dtype']} {x['shape']}: rel_dev={dev:.3g}")
+    if report.numerics_error:
+        print(f"  {report.numerics_error}")
+    print(
+        f"perf ({bench}): baseline={report.baseline_ms:.4g} ms ; acf={report.acf_ms:.4g} ms ; "
+        f"speedup={report.speedup:.3f}x ({report.win * 100:+.2f}%)"
+    )
+    print(f"BASELINE_MS {report.baseline_ms}")
+    print(f"ACF_MS {report.acf_ms}")
+    print(f"NUMERICS {status}")
+
+
+def _store_acf(root: str, t, ver: str) -> str:
+    """The ACF tuning admitted for this task's PTX under this exact ptxas, by the same key tuning wrote.
+
+    Deliberately no fallback to another ptxas version's ACF: an ACF is bound to the ptxas that produced
+    it, so the error lists what *is* stored instead of silently replaying a mismatched one."""
+    target = load_target("ptx")
+    arch, ir_hash = target.arch(t.ir), target.ir_hash(t.ir)
+    store = LocalStore(root)
+    path = store.find(target.name, arch, ir_hash, ver)
+    if path:
+        return path
+    others = sorted(
+        {e["toolchain_version"] or "untagged" for e in store.list(arch=arch) if e["ir_hash"][:16] == ir_hash[:16]}
+    )
+    hint = f"; it has ACFs for ptxas {', '.join(others)} only" if others else ""
+    raise FileNotFoundError(f"no ACF in store {root} for {target.name}/{arch}/{ir_hash[:16]} at ptxas {ver}{hint}")
+
+
 def _cmd_replay(args) -> int:
-    from .replay import replay
+    from .replay import replay, replay_acf
 
     try:
         t = task_mod.load(args.task)
@@ -191,6 +242,25 @@ def _cmd_replay(args) -> int:
         captured = sum(task_mod.pickled_input_path(t.dir, x) is not None for x in tensors)
         inputs = f"captured {captured}/{len(tensors)}" if captured else "synthetic"
         print(f"replay: {t.entry} ; arch={t.arch} ; ptxas={ptxas} (V{ver}) ; inputs={inputs}", flush=True)
+        acf = args.acf
+        if args.store is not None:
+            root = args.store or default_store_root()
+            acf = _store_acf(root, t, ver)
+            print(f"acf: {acf} (from store {root})", flush=True)
+        elif acf:
+            if not os.path.isfile(acf):
+                raise FileNotFoundError(f"ACF not found: {acf}")
+            print(f"acf: {acf}", flush=True)
+        if acf:
+            for warning in _acf_provenance(acf, t, ver):
+                print(f"warning: {warning}", flush=True)
+            report = replay_acf(t, ptxas, acf, warmup=args.warmup, rep=args.rep, bench=args.bench)
+            for ms in (report.baseline_ms, report.acf_ms):
+                if not math.isfinite(ms) or ms <= 0:
+                    raise RuntimeError(f"invalid replay timing: {ms}")
+            _print_acf_report(t, report, args.bench)
+            # A numerics failure is a verdict, not a crash: the full report is printed, then exit 1.
+            return 0 if report.numerics_ok else 1
         ms = replay(t, ptxas, warmup=args.warmup, rep=args.rep, bench=args.bench)
         if not math.isfinite(ms) or ms <= 0:
             raise RuntimeError(f"invalid replay timing: {ms}")
@@ -492,7 +562,7 @@ def _cmd_doctor() -> int:
 _USAGE = (
     "ptx_anneal --task <dir> [--output <store>] [options]\n"
     "       ptx_anneal --task-list <manifold_dir> [--output <store>] [options]\n"
-    "       ptx_anneal replay --task <dir> [options]\n"
+    "       ptx_anneal replay --task <dir|name> [--acf <file.acf> | --store [root]] [options]\n"
     "       ptx_anneal register_spill --task <kernel.ptx> [options]\n"
     "       ptx_anneal doctor"
 )
@@ -625,11 +695,32 @@ def _register_spill_parser() -> argparse.ArgumentParser:
 def _replay_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ptx_anneal replay",
-        description="Assemble and benchmark captured PTX without an engine or ACF. Uses the task's captured "
+        description="Assemble and benchmark captured PTX without an engine. Uses the task's captured "
         "input pickles where present and synthetic inputs otherwise; does not validate against original "
-        "outputs. Requires the harness and cudapy extras.",
+        "outputs. With --acf, also assemble with the ACF applied, check its outputs against the untuned "
+        "baseline and compare timings; exits 1 if the numerics check fails. Requires the harness and "
+        "cudapy extras.",
     )
-    p.add_argument("--task", required=True, help="local task directory or manifold:// task directory URL")
+    p.add_argument(
+        "--task",
+        required=True,
+        help="task directory, manifold:// task directory URL, or a task name/ir_hash looked up under "
+        "$COMPILE_IQ_TASK_DIR (default ~/.compile_iq/tasks) when no such directory exists",
+    )
+    acf = p.add_mutually_exclusive_group()
+    acf.add_argument(
+        "--acf",
+        help="ACF file to A/B against the untuned baseline (numerics via $PTX_ANNEAL_VALIDATOR / "
+        "$PTX_ANNEAL_REL_TOL, then performance)",
+    )
+    acf.add_argument(
+        "--store",
+        nargs="?",
+        const="",
+        metavar="ROOT",
+        help="like --acf, but use the ACF stored for this task's PTX and ptxas version in the ACF store "
+        "(default: $COMPILE_IQ_STORE or ~/.compile_iq/store)",
+    )
     p.add_argument("--ptxas", help="ptxas >= 13.3 (otherwise use environment / PATH / installed nvcc wheel)")
     p.add_argument("--warmup", type=int, default=25)
     p.add_argument("--rep", type=int, default=50)
@@ -661,6 +752,14 @@ def main(argv=None) -> int:
         return _cmd_register_spill(_register_spill_parser().parse_args(argv[1:]))
     if argv and argv[0] == "replay":
         args, command = _replay_parser().parse_args(argv[1:]), _cmd_replay
+        try:
+            resolved = task_mod.resolve_task_dir(args.task)
+        except task_mod.TaskError as e:
+            sys.stderr.write(f"[task] {e}\n")
+            return 1
+        if resolved != args.task:
+            print(f"task: {args.task} -> {resolved}", flush=True)
+            args.task = resolved
     else:
         parser = build_parser()
         args, command = parser.parse_args(argv), _cmd_tune
