@@ -1,0 +1,70 @@
+{
+  "entry": "triton_poi_fused_bmm_clone_permute_unsqueeze_view_3",
+  "arch": "sm_100a",
+  "shared": 2048,
+  "block": [
+    128,
+    1,
+    1
+  ],
+  "grid": [
+    16,
+    16384,
+    1
+  ],
+  "ptxas": "",
+  "ptxas_version": "13.3",
+  "tensors": [
+    {
+      "shape": [
+        131072,
+        2048
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        2048,
+        1
+      ]
+    },
+    {
+      "shape": [
+        256,
+        256,
+        8,
+        512,
+        1
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        1048576,
+        4096,
+        512,
+        1,
+        1
+      ]
+    }
+  ],
+  "args": [
+    {
+      "t": 0
+    },
+    {
+      "t": 1
+    },
+    {
+      "i32": 524288
+    },
+    {
+      "i32": 512
+    },
+    {
+      "null": true
+    },
+    {
+      "null": true
+    }
+  ],
+  "ptx_sha256": "f5d30d1aa8dae33d02e1e3eaef51fe3f4154e6f6c8e882bf606a828d02fa9407",
+  "kernel_name": "triton_poi_fused_bmm_clone_permute_unsqueeze_view_3",
+  "fn_name": "triton_poi_fused_bmm_clone_permute_unsqueeze_view_3"
+}

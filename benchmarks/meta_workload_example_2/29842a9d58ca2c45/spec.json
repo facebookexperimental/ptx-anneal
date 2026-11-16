@@ -1,0 +1,77 @@
+{
+  "entry": "triton_poi_fused_add_div_expand_mul_sigmoid_unsqueeze_73",
+  "arch": "sm_100a",
+  "shared": 0,
+  "block": [
+    128,
+    1,
+    1
+  ],
+  "grid": [
+    226240,
+    1,
+    1
+  ],
+  "ptxas": "",
+  "ptxas_version": "13.3",
+  "tensors": [
+    {
+      "shape": [
+        256,
+        3535,
+        256
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        904960,
+        256,
+        1
+      ]
+    },
+    {
+      "shape": [
+        256,
+        3535
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        3584,
+        1
+      ]
+    },
+    {
+      "shape": [
+        256,
+        3535
+      ],
+      "dtype": "bfloat16",
+      "strides": [
+        3535,
+        1
+      ]
+    }
+  ],
+  "args": [
+    {
+      "t": 0
+    },
+    {
+      "t": 1
+    },
+    {
+      "t": 2
+    },
+    {
+      "i32": 231669760
+    },
+    {
+      "null": true
+    },
+    {
+      "null": true
+    }
+  ],
+  "ptx_sha256": "29842a9d58ca2c45748f7093c98191280b478c26b094a01225fd720d4569c376",
+  "kernel_name": "triton_poi_fused_add_div_expand_mul_sigmoid_unsqueeze_73",
+  "fn_name": "triton_poi_fused_add_div_expand_mul_sigmoid_unsqueeze_73"
+}
