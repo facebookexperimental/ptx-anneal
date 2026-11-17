@@ -94,6 +94,16 @@ def relative_deviation(ref, cur) -> float:
     return (cur - ref).abs().max().item() / max(ref.abs().max().item(), 1e-9)
 
 
+def bench_ms(kernel, spec: dict, kernel_args, *, bench: str, warmup: int, rep: int) -> float:
+    """Time one loaded kernel with the CLI's benchmark method. Shared by the per-candidate scorer and
+    the batched benchmark server so both report comparable milliseconds."""
+    from .. import ptx_launch as L
+
+    if bench == "do_bench":
+        return L.bench_ms_do_bench(kernel, spec["grid"], spec["block"], kernel_args, warmup=warmup, reps=rep)
+    return L.bench_ms_cudagraph(kernel, spec["grid"], spec["block"], kernel_args, warmup=warmup, reps=max(rep // 10, 3))
+
+
 class PtxTarget(base.Target):
     """Tune ptxas ACFs for a fixed PTX kernel via the PTX-direct launch bridge."""
 
@@ -164,10 +174,7 @@ class PtxTarget(base.Target):
                 deviations = [relative_deviation(r, cur) for r, cur in zip(ref, tensors, strict=True)]
                 load_validator().check(deviations)
                 # 4) preserve the CLI's selected timing method. Keep `tms` alive through timing.
-                if bench == "do_bench":
-                    ms = L.bench_ms_do_bench(k, spec["grid"], spec["block"], ka, warmup=warmup, reps=rep)
-                else:
-                    ms = L.bench_ms_cudagraph(k, spec["grid"], spec["block"], ka, warmup=warmup, reps=max(rep // 10, 3))
+                ms = bench_ms(k, spec, ka, bench=bench, warmup=warmup, rep=rep)
                 del tms
                 return float(ms)
             finally:

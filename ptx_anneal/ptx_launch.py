@@ -419,10 +419,13 @@ def build_spec_from_schema(schema: dict, ptx: str, grid, ordered_args, ptxas: st
 DEFAULT_PTXAS_FLAGS = ("--regAllocOptLevel=2",)
 
 
-def ptxas_compile(ptx: str, ptxas: str, arch: str | None = None, acf_path: str | None = None, extra_args=()) -> bytes:
+def ptxas_compile(
+    ptx: str, ptxas: str, arch: str | None = None, acf_path: str | None = None, extra_args=(), timeout=None
+) -> bytes:
     """Assemble PTX -> cubin with ptxas. If acf_path is given, append --apply-controls=<acf>
-    (the consume mechanism). Raises RuntimeError with ptxas stderr on failure."""
-    cubin, _ = _ptxas_compile(ptx, ptxas, arch, acf_path, extra_args)
+    (the consume mechanism). Raises RuntimeError with ptxas stderr on failure, and
+    subprocess.TimeoutExpired when ``timeout`` seconds pass first."""
+    cubin, _ = _ptxas_compile(ptx, ptxas, arch, acf_path, extra_args, timeout)
     return cubin
 
 
@@ -439,7 +442,9 @@ def ptxas_spill_bytes(ptx: str, ptxas: str, arch: str | None = None, acf_path: s
     return sum(int(stores) + int(loads) for stores, loads in spills)
 
 
-def _ptxas_compile(ptx: str, ptxas: str, arch: str | None, acf_path: str | None, extra_args) -> tuple[bytes, str]:
+def _ptxas_compile(
+    ptx: str, ptxas: str, arch: str | None, acf_path: str | None, extra_args, timeout=None
+) -> tuple[bytes, str]:
     """Shared assembler invocation, retaining diagnostics for compile-only objectives."""
     arch = arch or parse_arch(ptx)
     with (
@@ -451,7 +456,7 @@ def _ptxas_compile(ptx: str, ptxas: str, arch: str | None, acf_path: str | None,
         cmd = [ptxas, f"-arch={arch}", pf.name, "-o", cf.name, *DEFAULT_PTXAS_FLAGS, *extra_args]
         if acf_path:
             cmd.append(f"--apply-controls={acf_path}")
-        r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
         if r.returncode != 0:
             raise RuntimeError(f"ptxas failed (rc={r.returncode}): {r.stderr.strip()}\n  cmd: {' '.join(cmd)}")
         with open(cf.name, "rb") as f:
