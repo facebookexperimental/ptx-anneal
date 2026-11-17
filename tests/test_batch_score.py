@@ -101,8 +101,9 @@ def test_run_engine_hands_batch_commands_to_adapters(monkeypatch, tmp_path):
 
 def test_score_server_reports_setup_failure_as_not_ready(tmp_path):
     out = io.StringIO()
-    code = batch_score.serve(str(tmp_path / "missing"), "/ptxas", warmup=1, rep=1, bench="cudagraph",
-                             stdin=io.StringIO(""), stdout=out)
+    code = batch_score.serve(
+        str(tmp_path / "missing"), "/ptxas", warmup=1, rep=1, bench="cudagraph", stdin=io.StringIO(""), stdout=out
+    )
     assert code == 1
     reply = json.loads(out.getvalue())
     assert reply["ready"] is False and reply["error"]
@@ -139,8 +140,9 @@ def test_score_server_end_to_end_on_gpu(tmp_path):
         )
     )
     out = io.StringIO()
-    code = batch_score.serve(SAMPLE_TASK, ptxas, warmup=2, rep=10, bench="cudagraph",
-                             stdin=io.StringIO(requests), stdout=out)
+    code = batch_score.serve(
+        SAMPLE_TASK, ptxas, warmup=2, rep=10, bench="cudagraph", stdin=io.StringIO(requests), stdout=out
+    )
     replies = [json.loads(line) for line in out.getvalue().splitlines()]
     assert code == 0
     assert replies[0]["ready"] and replies[0]["baseline_ms"] > 0
@@ -149,4 +151,3 @@ def test_score_server_end_to_end_on_gpu(tmp_path):
     # A cubin that does not load is an ordinary invalid candidate; the context survives it.
     assert replies[3]["id"] == 3 and not replies[3]["ok"] and replies[3]["fatal"] is False
     assert replies[4]["id"] == 4 and replies[4]["ok"]
-

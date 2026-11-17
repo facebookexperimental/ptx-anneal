@@ -69,8 +69,21 @@ _EOF = object()
 class _Config:
     """Everything a lane needs to launch scorers, read once from the environment."""
 
-    def __init__(self, *, task, ptxas, warmup, rep, score_cmd, compile_cmd, server_cmd, task_timeout,
-                 retime_every, max_failures, startup_timeout):
+    def __init__(
+        self,
+        *,
+        task,
+        ptxas,
+        warmup,
+        rep,
+        score_cmd,
+        compile_cmd,
+        server_cmd,
+        task_timeout,
+        retime_every,
+        max_failures,
+        startup_timeout,
+    ):
         self.task = task
         self.ptxas = ptxas
         self.task_timeout = task_timeout

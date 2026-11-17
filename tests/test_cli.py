@@ -241,8 +241,14 @@ def test_batch_scored_winner_is_retimed_before_admission(monkeypatch, tmp_path):
     def run_adapter(command, *, env, check):
         calls.append("search")
         assert command[1].endswith("compileiq_batch_adapter.py")
-        result = {"acf": b"acf".hex(), "best_ms": 0.05, "best_raw_ms": 0.95, "evaluated": 4, "valid": 4,
-                  "budget": {"scorer": "batch", "num_workers": 1}}
+        result = {
+            "acf": b"acf".hex(),
+            "best_ms": 0.05,
+            "best_raw_ms": 0.95,
+            "evaluated": 4,
+            "valid": 4,
+            "budget": {"scorer": "batch", "num_workers": 1},
+        }
         Path(env["PTX_ANNEAL_RESULT"]).write_text(json.dumps(result))
         return SimpleNamespace(returncode=0)
 
