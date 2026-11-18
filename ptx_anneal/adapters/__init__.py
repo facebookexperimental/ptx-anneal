@@ -8,4 +8,6 @@ An adapter is the bring-your-own-engine boundary. It imports ONLY its engine (+ 
 the harness can be a frozen, engine-free binary). It drives the engine's search, scoring each
 candidate by shelling out to the harness ``_score`` subcommand, and writes the winner to a result
 file. See :mod:`ptx_anneal.adapters.compileiq_adapter` for the contract.
+:mod:`ptx_anneal.adapters.compileiq_batch_adapter` (``--batch-scoring``) instead scores each generation
+as one batch through the harness ``_compile`` and per-GPU ``_score_server`` subcommands.
 """

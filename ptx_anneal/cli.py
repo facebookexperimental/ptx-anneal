@@ -22,7 +22,9 @@ Provisioning (env; flags override):
     PTXAS / TRITON_PTXAS_BLACKWELL_PATH   ptxas to assemble/apply ACFs with
     PTX_ANNEAL_ENGINE_PYTHON              interpreter that has the engine (default: this interpreter,
                                           i.e. install the engine into the same env as ptx_anneal)
-    PTX_ANNEAL_ENGINE_ADAPTER             bring-your-own engine adapter (default: bundled CompileIQ)
+    PTX_ANNEAL_ENGINE_ADAPTER             bring-your-own engine adapter (default: bundled CompileIQ;
+                                          --batch-scoring selects the bundled batch adapter, which
+                                          drives the ``_compile`` and ``_score_server`` subcommands)
 
 Version gate: ``ptxas >= MIN_PTXAS`` is required and not overridable -- ``--apply-controls`` (how an
 ACF is applied at all) is GA only from that version on, so an older ptxas cannot consume what this
@@ -119,9 +121,9 @@ def _harness_cmd() -> list[str]:
     return [sys.executable, "-m", "ptx_anneal.cli"]
 
 
-def _bundled_adapter() -> str:
+def _bundled_adapter(name: str = "compileiq_adapter.py") -> str:
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, "adapters", "compileiq_adapter.py")
+    return os.path.join(base, "adapters", name)
 
 
 # -- _score: the per-candidate scorer (engine-free; selects a scorer from the task spec) ----------
@@ -141,6 +143,25 @@ def _cmd_score(args) -> int:
         sys.stderr.write(f"[_score] {type(e).__name__}: {e}\n")
         print("INVALID")
     return 0
+
+
+# -- _compile / _score_server: the batched scorer behind --batch-scoring (see batch_score) ---------
+def _cmd_compile(args) -> int:
+    from .batch_score import compile_batch
+
+    for result in compile_batch(
+        args.task, _resolve_ptxas(args), args.acf, args.out, jobs=args.jobs, timeout=args.timeout or None
+    ):
+        print(json.dumps(result), flush=True)
+    return 0
+
+
+def _cmd_score_server(args) -> int:
+    from .batch_score import serve
+
+    ptxas = _resolve_ptxas(args)
+    os.environ["TRITON_PTXAS_BLACKWELL_PATH"] = ptxas
+    return serve(args.task, ptxas, warmup=args.warmup, rep=args.rep, bench=args.bench)
 
 
 def _score_spills(task: str, acf: str | None, ptxas: str) -> int:
@@ -275,7 +296,12 @@ def _engine_command(args) -> tuple[str, str]:
     # Override only when the engine lives in a separate interpreter.
     engine_python = args.engine_python or os.environ.get("PTX_ANNEAL_ENGINE_PYTHON") or sys.executable
     # The engine stays bring-your-own: the bundled CompileIQ adapter is only the default.
-    adapter = args.engine_adapter or os.environ.get("PTX_ANNEAL_ENGINE_ADAPTER") or _bundled_adapter()
+    if getattr(args, "batch_scoring", False):
+        if args.engine_adapter:
+            raise SystemExit("ptx_anneal: --batch-scoring selects the bundled batch adapter; drop --engine-adapter")
+        adapter = _bundled_adapter("compileiq_batch_adapter.py")
+    else:
+        adapter = args.engine_adapter or os.environ.get("PTX_ANNEAL_ENGINE_ADAPTER") or _bundled_adapter()
     if not os.path.exists(adapter):
         raise SystemExit(f"ptx_anneal: engine adapter not found: {adapter!r}")
     return engine_python, adapter
@@ -290,6 +316,10 @@ def _run_engine(
     env = dict(os.environ)
     score_args = ["--bench", args.bench] if metric == "ms" else ["--metric", metric]
     env["PTX_ANNEAL_SCORE_CMD"] = json.dumps([*_harness_cmd(), "_score", *score_args])
+    # For batch adapters: parallel ptxas over a pool, and a persistent benchmark process per GPU.
+    env["PTX_ANNEAL_COMPILE_CMD"] = json.dumps([*_harness_cmd(), "_compile"])
+    if metric == "ms":
+        env["PTX_ANNEAL_SERVER_CMD"] = json.dumps([*_harness_cmd(), "_score_server", "--bench", args.bench])
     env["PTX_ANNEAL_METRIC"] = metric
     env["PTX_ANNEAL_TASK"] = os.path.abspath(args.task)
     env["PTX_ANNEAL_PTXAS"] = ptxas
@@ -361,14 +391,15 @@ def _cmd_tune(args) -> int:
     search_best_ms = best_ms
     budget = res.get("budget") or {}
     if (
-        budget.get("num_workers", 1) > 1
+        (budget.get("num_workers", 1) > 1 or budget.get("scorer") == "batch")
         and acf_hex
         and isinstance(best_ms, (int, float))
         and math.isfinite(best_ms)
         and baseline_ok
     ):
-        # Search timings may come from another GPU. Admission must compare the winner on the
-        # original baseline device, after all parallel scorers have exited.
+        # Search timings may come from another GPU, and batch scores are rescaled to a reference
+        # baseline. Admission must compare the winner on the original baseline device, in the same
+        # kind of process as the baseline, after all search scorers have exited.
         with tempfile.TemporaryDirectory(prefix="ptx_anneal_winner_") as tmp:
             acf_path = os.path.join(tmp, "winner.acf")
             with open(acf_path, "wb") as f:
@@ -649,6 +680,13 @@ def build_parser() -> argparse.ArgumentParser:
         "requires CUDA_VISIBLE_DEVICES unless --full-tune probes the device list",
     )
     g.add_argument("--target", default="ptx", help="target (default: %(default)s)")
+    g.add_argument(
+        "--batch-scoring",
+        action="store_true",
+        help="score each generation as a batch: parallel ptxas, one persistent benchmark process per GPU, "
+        "and scores relative to a baseline re-timed on the same GPU; a candidate that hangs or crashes "
+        "falls back to per-candidate processes. Requires CompileIQ >= 1.1 (see --engine-python)",
+    )
 
     _add_provisioning_pins(p)
     return p
@@ -740,6 +778,31 @@ def _score_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _compile_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="ptx_anneal _compile", description="Assemble a pool of ACFs in parallel (internal)."
+    )
+    p.add_argument("--task", required=True)
+    p.add_argument("--ptxas")
+    p.add_argument("--out", required=True, help="directory for the cubins")
+    p.add_argument("--jobs", type=int, help="parallel ptxas processes (default: min(32, CPUs))")
+    p.add_argument("--timeout", type=float, default=0, help="per-ACF ptxas timeout in seconds (0 = none)")
+    p.add_argument("acf", nargs="+", help="ACF files")
+    return p
+
+
+def _score_server_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="ptx_anneal _score_server", description="Persistent per-GPU benchmark server (internal)."
+    )
+    p.add_argument("--task", required=True)
+    p.add_argument("--ptxas")
+    p.add_argument("--warmup", type=int, default=25)
+    p.add_argument("--rep", type=int, default=50)
+    p.add_argument("--bench", choices=["cudagraph", "do_bench"], default="cudagraph")
+    return p
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "doctor":
@@ -748,6 +811,10 @@ def main(argv=None) -> int:
         return _cmd_doctor()
     if argv and argv[0] == "_score":
         return _cmd_score(_score_parser().parse_args(argv[1:]))
+    if argv and argv[0] == "_compile":
+        return _cmd_compile(_compile_parser().parse_args(argv[1:]))
+    if argv and argv[0] == "_score_server":
+        return _cmd_score_server(_score_server_parser().parse_args(argv[1:]))
     if argv and argv[0] == "register_spill":
         return _cmd_register_spill(_register_spill_parser().parse_args(argv[1:]))
     if argv and argv[0] == "replay":

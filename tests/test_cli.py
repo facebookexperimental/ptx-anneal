@@ -223,3 +223,39 @@ def test_format_report_no_gpu():
     text = provision.format_report(rep)
     assert "ptxas: not found" in text
     assert "real tuning ready: no" in text
+
+
+def test_batch_scored_winner_is_retimed_before_admission(monkeypatch, tmp_path):
+    # One GPU, but batch scores are rescaled: the admitted time must be the harness's own re-timing.
+    sample = Path(__file__).parents[1] / "sample_tasks" / "sample_task"
+    args = cli.build_parser().parse_args(["--task", str(sample), "--output", str(tmp_path), "--batch-scoring"])
+    monkeypatch.delenv("PTX_ANNEAL_FORCE_ADMIT", raising=False)
+    monkeypatch.setattr(cli, "_require_ptxas", lambda args: ("/ptxas", "13.3"))
+    monkeypatch.setattr(cli, "_fingerprint", lambda *a: {})
+    calls = []
+
+    def score(task, acf, warmup, rep, bench, ptxas):
+        calls.append("baseline" if acf is None else "winner")
+        return 1.0 if acf is None else 0.9
+
+    def run_adapter(command, *, env, check):
+        calls.append("search")
+        assert command[1].endswith("compileiq_batch_adapter.py")
+        result = {
+            "acf": b"acf".hex(),
+            "best_ms": 0.05,
+            "best_raw_ms": 0.95,
+            "evaluated": 4,
+            "valid": 4,
+            "budget": {"scorer": "batch", "num_workers": 1},
+        }
+        Path(env["PTX_ANNEAL_RESULT"]).write_text(json.dumps(result))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli, "_score_one", score)
+    monkeypatch.setattr(cli.subprocess, "run", run_adapter)
+    assert cli._cmd_tune(args) == 0
+    assert calls == ["baseline", "search", "winner"]
+    (artifact,) = tmp_path.rglob("*.acf.json")
+    metadata = json.loads(artifact.read_text())
+    assert metadata["best_ms"] == 0.9 and metadata["search_best_ms"] == 0.05

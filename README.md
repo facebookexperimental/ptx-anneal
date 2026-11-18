@@ -294,6 +294,37 @@ CIQ_GENERATIONS=5 CIQ_POOL=32 CIQ_CULL=8 ptx-anneal --task <task_dir>
 deprecates and ignores `cull_size`; setting it only controls culling on engine versions
 that support that setting.
 
+### Batch scoring
+
+`--batch-scoring` scores each generation as one batch instead of starting a `_score` process
+per candidate. It needs CompileIQ >= 1.1 in the engine's interpreter (`--engine-python`):
+
+```bash
+ptx-anneal --task <task_dir> --full-tune --batch-scoring --engine-python <python with compileiq 1.1>
+```
+
+Per generation, the batch adapter (`ptx_anneal/adapters/compileiq_batch_adapter.py`):
+
+1. assembles the whole pool with one `_compile` call (parallel ptxas, same flags as `_score`);
+2. reuses the score of any cubin already measured, so identical machine code is timed once;
+3. sends the remaining cubins to one long-lived `_score_server` per GPU, which keeps the CUDA
+   context, the inputs (restored before every candidate) and the untuned reference outputs, then
+   validates and times each cubin with the same `--bench` method as `_score`;
+4. reports `ms * reference / same-GPU baseline`, where the server re-times the untuned kernel at
+   the start of every batch and every `PTX_ANNEAL_BATCH_RETIME` candidates (default 8) and the
+   same-GPU baseline is the median of those timings.
+
+The CLI re-times the winner in its own process before admitting it, so a rescaled search
+score is never what gets admitted; the sidecar keeps both.
+
+If a server stops answering within `CIQ_TASK_TIMEOUT` (a hang) or dies or reports a poisoned
+CUDA context (a crash), the adapter kills it and finishes that GPU's share of the batch with
+per-candidate `_score` processes, each with its own CUDA context. A crashing candidate is
+re-scored that way; a hung one is recorded as a timeout. The next batch starts a fresh server
+unless that GPU has already failed `PTX_ANNEAL_BATCH_MAX_FAILURES` times (default 3).
+`PTX_ANNEAL_BATCH_STARTUP_TIMEOUT` (default 600 s) bounds server setup. Runtime (`ms`)
+tuning only; `register_spill` keeps the standard adapter.
+
 ```
 ptx_anneal --task ──> baseline score (in-process)
                 └───> $PTX_ANNEAL_ENGINE_ADAPTER (subprocess, engine's own interpreter)
